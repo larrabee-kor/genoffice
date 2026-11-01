@@ -161,6 +161,8 @@ def build_face(slug: str, cls: str, table: dict) -> list[int]:
             font["name"].setName(family, rec.nameID, rec.platformID, rec.platEncID, rec.langID)
         elif rec.nameID in (3, 6):
             font["name"].setName(ps_name, rec.nameID, rec.platformID, rec.platEncID, rec.langID)
+    # reproducible output: the source's timestamps, not the build time
+    font.recalcTimestamp = False
     font.flavor = "woff2"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     font.save(str(OUT_DIR / f"{slug}.woff2"))
