@@ -20,6 +20,8 @@ describe('findOpenableDocPath', () => {
     expect(findOpenableDocPath(['GenOffice Docs', '/tmp/notes.odt'])).toBe('/tmp/notes.odt')
     // and so does the .ott template, in either case
     expect(findOpenableDocPath(['GenOffice Docs', '/tmp/letter.ott'])).toBe('/tmp/letter.ott')
+    // .hwpx (Hancom) opens through the HWPX import filter
+    expect(findOpenableDocPath(['GenOffice Docs', '/tmp/신고서.HWPX'])).toBe('/tmp/신고서.HWPX')
     expect(findOpenableDocPath(['GenOffice Docs', '/tmp/LETTER.OTT'])).toBe('/tmp/LETTER.OTT')
   })
 
@@ -37,7 +39,7 @@ describe('findOpenableDocPath', () => {
  */
 describe('OPENABLE_DOC_EXTENSIONS', () => {
   it('covers every extension the argv route and the guard accept', () => {
-    expect(OPENABLE_DOC_EXTENSIONS).toEqual(['docx', 'odt', 'ott'])
+    expect(OPENABLE_DOC_EXTENSIONS).toEqual(['docx', 'odt', 'ott', 'hwpx', 'hwp'])
     for (const extension of OPENABLE_DOC_EXTENSIONS) {
       expect(isOpenableDocPath(`/tmp/Quarterly Plan.${extension.toUpperCase()}`)).toBe(true)
     }
