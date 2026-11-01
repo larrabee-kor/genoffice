@@ -175,6 +175,7 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
     const sec = root.find((node) => nodeName(node) === 'hs:sec')
     if (!sec) continue
     if (index > 0 && body.length > 0) {
+      body.splice(0, body.length, ...settleTableGaps(body, false))
       // trailing empty lines of the previous section only pad the page before
       // the break; where a wider fallback font pushes them over, they would
       // leave a blank page behind
@@ -192,6 +193,7 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
     }
     ended = ctx.current
   }
+  body.splice(0, body.length, ...settleTableGaps(body, false))
 
   const blocks: SaveBlock[] = body.map((xml) => ({ kind: 'xml', xml }))
   // a document that ends on a table needs a paragraph after it (Word merges two
@@ -247,6 +249,8 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
   let markSize: number | undefined
   let emittedAny = false
   let hadTable = false
+  /** a text box set like a character was flattened: its text stands in for the box's line */
+  let hadBox = false
   const trailing: string[] = []
 
   // Hangul's condense rule needs the saved line layout matched char by char
@@ -424,7 +428,8 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
           const captionBlocks = caption ? await subListBlocks(caption, ctx) : []
           const below = attr(caption, 'side') !== 'TOP'
           if (!below) out.push(...captionBlocks)
-          out.push(await tableXml(node, ctx, format.align))
+          const host = tableHost(p, node, format, lastInCell)
+          out.push(withTableGaps(await tableXml(node, ctx, host), host, node))
           if (below) out.push(...captionBlocks)
           hadTable = true
           emittedAny = true
@@ -460,9 +465,20 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
         case 'hp:curve':
         case 'hp:arc':
         case 'hp:line':
-        case 'hp:connectLine':
+        case 'hp:connectLine': {
+          const flattened = trailing.length
           await shapeContent(node, ctx, segments, trailing)
+          if (
+            trailing.length > flattened &&
+            attr(firstChild(node, 'hp:pos'), 'treatAsChar') === '1'
+          ) {
+            hadBox = true
+            const gaps = boxGaps(p, node)
+            if (gaps && gaps.bottomTw > 0) trailing.push(gapParagraph(gaps.bottomTw))
+            if (gaps && gaps.topTw > 0) trailing.splice(flattened, 0, gapParagraph(gaps.topTw))
+          }
           break
+        }
         case 'hp:equation':
           ctx.drops.add('equations')
           break
@@ -478,8 +494,10 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
     }
   }
   // an empty paragraph is a real line in Hangul (vertical space); keep it,
-  // unless the paragraph only existed to anchor a table
-  flush(!hadTable || segments.length > 0 ? !emittedAny : false, true)
+  // unless the paragraph only existed to anchor a table, or a text box whose
+  // flattened text is its line (ftc-57's 69.8pt box kept an empty 18pt line
+  // above its table)
+  flush(!(hadTable || hadBox) || segments.length > 0 ? !emittedAny : false, true)
   out.push(...trailing)
   return out
 }
@@ -533,7 +551,7 @@ async function subListBlocks(owner: XNode, ctx: Ctx): Promise<string[]> {
   for (const { name, node } of elements(subList)) {
     if (name === 'hp:p') out.push(...(await paragraphBlocks(node, ctx)))
   }
-  return out
+  return settleTableGaps(out, false)
 }
 
 /** stand-in for Hangul's fixed-width space (hp:fwSpace) until its run is built */
@@ -1203,7 +1221,7 @@ const V_ALIGN: Record<string, CellInfo['vAlign']> = {
   BOTTOM: 'bottom',
 }
 
-async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<string> {
+async function tableXml(tbl: XNode, ctx: Ctx, host: TableHost): Promise<string> {
   if (ctx.tableDepth >= MAX_TABLE_DEPTH) {
     ctx.drops.add('deep-nested-tables')
     return '<w:p/>'
@@ -1270,9 +1288,16 @@ async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<strin
         `<w:bottom w:w="${hwpToTwips(intAttr(inMargin, 'bottom'))}" w:type="dxa"/>` +
         `<w:right w:w="${hwpToTwips(intAttr(inMargin, 'right'))}" w:type="dxa"/></w:tblCellMar>`
       : ''
+    const widthTw = colTw.reduce((a, b) => a + b, 0)
+    // w:tblInd of a document without compatibilityMode measures to the first
+    // cell's text: the rule sits that cell's left margin further out
+    const firstCell = grid[0]?.[0]
+    const textInsetTw =
+      firstCell?.margin?.left ??
+      (inMargin ? hwpToTwips(intAttr(inMargin, 'left')) : WORD_CELL_MARGIN_TW)
     const parts: string[] = [
-      `<w:tbl><w:tblPr><w:tblW w:w="${colTw.reduce((a, b) => a + b, 0)}" w:type="dxa"/>` +
-        `${tablePlacementXml(tbl, hostAlign)}<w:tblLayout w:type="fixed"/>${defaultMar}<w:tblLook w:val="0000"/></w:tblPr>`,
+      `<w:tbl><w:tblPr><w:tblW w:w="${widthTw}" w:type="dxa"/>` +
+        `${tablePlacementXml(tbl, host, widthTw, textInsetTw)}<w:tblLayout w:type="fixed"/>${defaultMar}<w:tblLook w:val="0000"/></w:tblPr>`,
       `<w:tblGrid>${colTw.map((width) => `<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>`,
     ]
     // Hangul never splits a table set like a character across pages: one that
@@ -1347,15 +1372,292 @@ function withKeepNext(xml: string): string {
   return xml.slice(0, m.index) + next + xml.slice(m.index + m[0].length)
 }
 
+/** Word's left cell margin where a table declares none (GenOffice convert.ts DEFAULT_CELL_MAR) */
+const WORD_CELL_MARGIN_TW = 108
+
+/** the line a table set like a character (treatAsChar) occupies in its host paragraph */
+interface TableHost {
+  align?: string
+  /** where the host line starts from the column's left edge (the paragraph indents), twips */
+  startTw: number
+  /** the paragraph's right indent, twips */
+  endTw: number
+  /** the line's width inside the indents (twips); null without a saved layout */
+  roomTw: number | null
+  /** space above the table's top rule, twips */
+  topTw: number
+  /** space below its bottom rule to the next line, twips (negative: the next line overlaps it) */
+  bottomTw: number
+}
+
+/** first top and last bottom (with its line gap) of the saved lines of a sub-list's paragraphs, HWPUNIT */
+function savedSpan(subList: XNode): number | null {
+  let top = Infinity
+  let bottom = -Infinity
+  for (const { name, node } of elements(subList)) {
+    if (name !== 'hp:p') continue
+    const array = firstChild(node, 'hp:linesegarray')
+    for (const seg of array ? elements(array) : []) {
+      if (seg.name !== 'hp:lineseg') continue
+      const vertpos = intAttr(seg.node, 'vertpos', 0)
+      top = Math.min(top, vertpos)
+      bottom = Math.max(
+        bottom,
+        vertpos + intAttr(seg.node, 'vertsize', 0) + intAttr(seg.node, 'spacing', 0),
+      )
+    }
+  }
+  return bottom > top ? bottom - top : null
+}
+
+/**
+ * A text box set like a character is its host line: Hangul saved that line
+ * (the box with its outer margins, then the line gap), and the box's text
+ * starts its top text margin into it. Flattened, the text keeps its own
+ * saved lines, so the rest of the host line goes above and below it
+ * (ftc-57's 69.8pt box around a 64.2pt table line, lawgo-18's title box).
+ * Null when the host paragraph saved no single line holding just the box.
+ */
+function boxGaps(p: XNode, shape: XNode): { topTw: number; bottomTw: number } | null {
+  const array = firstChild(p, 'hp:linesegarray')
+  const lines = array ? elements(array).filter((seg) => seg.name === 'hp:lineseg') : []
+  const subList = firstChild(firstChild(shape, 'hp:drawText'), 'hp:subList')
+  if (lines.length !== 1 || !subList) return null
+  const out = firstChild(shape, 'hp:outMargin')
+  const height = intAttr(firstChild(shape, 'hp:sz'), 'height', 0)
+  const vertsize = intAttr(lines[0].node, 'vertsize', 0)
+  if (Math.abs(vertsize - (height + intAttr(out, 'top', 0) + intAttr(out, 'bottom', 0))) > 2) {
+    return null
+  }
+  const inner = savedSpan(subList)
+  if (inner === null) return null
+  const top =
+    intAttr(out, 'top', 0) +
+    intAttr(firstChild(firstChild(shape, 'hp:drawText'), 'hp:textMargin'), 'top', 0)
+  const advance = vertsize + intAttr(lines[0].node, 'spacing', 0)
+  return { topTw: hwpToTwips(top), bottomTw: hwpToTwips(advance - top - inner) }
+}
+
+/** the paragraph holds the table and nothing else that draws (section and column controls aside) */
+function onlyTable(p: XNode): boolean {
+  let tables = 0
+  for (const { name, node } of elements(p)) {
+    if (name === 'hp:linesegarray') continue
+    if (name !== 'hp:run') return false
+    for (const child of elements(node)) {
+      if (child.name === 'hp:tbl') tables++
+      else if (child.name === 'hp:t') {
+        for (const piece of children(child.node)) {
+          const name = nodeName(piece)
+          if (name === '#text' ? (textOf(piece) ?? '').trim() : name && name !== 'hp:nbSpace') {
+            return false
+          }
+        }
+      } else if (child.name !== 'hp:secPr' && child.name !== 'hp:ctrl') return false
+    }
+  }
+  return tables === 1
+}
+
+/**
+ * Hangul sets a table placed like a character on a line of its own: the
+ * outer margins (hp:outMargin) widen it on every side, so the rules sit that
+ * far inside the line, and the saved line (table height plus the top and
+ * bottom margins, korea-156787237's 3481 + 283 + 283 = 4047) is followed by
+ * the paragraph's line gap like any other line.
+ */
+function tableHost(
+  p: XNode,
+  tbl: XNode,
+  format: {
+    align?: string
+    indentLeft?: number
+    indentRight?: number
+    indentFirstLine?: number
+    spaceBefore?: number
+    spaceAfter?: number
+    pageBreakBefore?: boolean
+  },
+  lastInCell: boolean,
+): TableHost {
+  const out = firstChild(tbl, 'hp:outMargin')
+  const alone = onlyTable(p)
+  const array = firstChild(p, 'hp:linesegarray')
+  const lines = array ? elements(array).filter((seg) => seg.name === 'hp:lineseg') : []
+  // the first line starts at the first-line indent; a table after text sits on a later one
+  const startTw = (format.indentLeft ?? 0) + (alone ? (format.indentFirstLine ?? 0) : 0)
+  const endTw = format.indentRight ?? 0
+  const saved = lines.length > 0 ? hwpToTwips(intAttr(lines[0].node, 'horzsize', 0)) : 0
+  const height = intAttr(firstChild(tbl, 'hp:sz'), 'height', 0)
+  const top = intAttr(out, 'top', 0)
+  const bottom = intAttr(out, 'bottom', 0)
+  const ownLine =
+    alone &&
+    lines.length === 1 &&
+    Math.abs(intAttr(lines[0].node, 'vertsize', 0) - (height + top + bottom)) <= 2
+  // a cell's last line keeps no gap under it (lastLinesHeight)
+  const gap = ownLine && !lastInCell ? intAttr(lines[0].node, 'spacing', 0) : 0
+  return {
+    ...(format.align ? { align: format.align } : {}),
+    startTw,
+    endTw,
+    roomTw: saved > 0 ? saved - startTw - endTw : null,
+    // the host's own page break is not carried (as before): GenOffice then
+    // places the page-break paragraph after a page-relative full-page
+    // picture on the picture's page and holds that picture's band on the
+    // next page too (korea-156787074 ran to 9 pages); a page started by the
+    // table drops the spacing before (korea-156787237's attachment table)
+    topTw: hwpToTwips(top) + (alone && !format.pageBreakBefore ? (format.spaceBefore ?? 0) : 0),
+    bottomTw: hwpToTwips(bottom + gap) + (alone && !lastInCell ? (format.spaceAfter ?? 0) : 0),
+  }
+}
+
+const TABLE_GAPS = /^<!--hwp-table-gaps:(-?\d+):(-?\d+)-->/
+
+/**
+ * A table set like a character carries its host line's gaps until
+ * settleTableGaps spends them on its neighbours. A placed table's outer
+ * margins are its text-wrap distance, not a line: it keeps the flow position
+ * (lawgo-7's form table sat 3.7pt low with them).
+ */
+function withTableGaps(xml: string, host: TableHost, tbl: XNode): string {
+  if (!/^<w:tbl[\s>]/.test(xml)) return xml
+  if (attr(firstChild(tbl, 'hp:pos'), 'treatAsChar') !== '1') return xml
+  return `<!--hwp-table-gaps:${host.topTw}:${host.bottomTw}-->${xml}`
+}
+
+/** an empty paragraph exactly `tw` tall: the gap around a table where no paragraph can carry it */
+function gapParagraph(tw: number): string {
+  return (
+    '<w:p><w:pPr>' +
+    `<w:spacing w:before="0" w:after="0" w:line="${Math.max(2, Math.round(tw))}" w:lineRule="exact"/>` +
+    '<w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>'
+  )
+}
+
+/**
+ * Add `tw` to a paragraph's own spacing before or after; null when the block
+ * is not a paragraph or does not state that spacing (an inherited value is
+ * not known here). A negative amount first uses up the paragraph's spacing
+ * before, then the exact height of an empty line (korea-156787237: the date
+ * table's line gap of -6pt pulls the empty line under it 3.2pt into the table's
+ * bottom margin); what is left is dropped.
+ */
+function withParagraphSpacing(xml: string, side: 'before' | 'after', tw: number): string | null {
+  if (!/^<w:p[\s>]/.test(xml)) return null
+  const end = xml.indexOf('</w:pPr>')
+  if (end < 0) return null
+  const ownEnd = xml.slice(0, end).indexOf('<w:rPr>')
+  const pPr = ownEnd >= 0 ? xml.slice(0, ownEnd) : xml.slice(0, end)
+  const spacing = /<w:spacing\b[^>]*\/>/.exec(pPr)
+  if (!spacing) return null
+  let tag = spacing[0]
+  const current = new RegExp(`\\bw:${side}="(\\d+)"`).exec(tag)
+  if (!current && side === 'after') return null
+  let value = (current ? Number(current[1]) : 0) + Math.round(tw)
+  if (value < 0 && side === 'before' && !/<w:r[\s>]/.test(xml)) {
+    const line = /\bw:line="(\d+)"/.exec(tag)
+    if (line && /\bw:lineRule="exact"/.test(tag)) {
+      tag = tag.replace(line[0], `w:line="${Math.max(2, Number(line[1]) + value)}"`)
+    }
+  }
+  value = Math.max(0, value)
+  tag = current
+    ? tag.replace(current[0], `w:${side}="${value}"`)
+    : tag.replace('<w:spacing', `<w:spacing w:${side}="${value}"`)
+  return xml.slice(0, spacing.index) + tag + xml.slice(spacing.index + spacing[0].length)
+}
+
+/**
+ * Spend the gaps withTableGaps attached to tables on the blocks around them:
+ * the top one on the paragraph above (its spacing after), the bottom one on
+ * the paragraph below (its spacing before), an exact-height empty paragraph
+ * where the neighbour is another table or nothing. Without the
+ * gaps a table set like a character climbs 2.8pt into the line above and the
+ * text under it rises by its margin and line gap (korea-156787237's title box
+ * sat 12pt high). `closeWithGap`: a list that must end in a paragraph (a cell)
+ * closes on the pending bottom gap instead of a default empty line.
+ */
+function settleTableGaps(blocks: string[], closeWithGap: boolean): string[] {
+  const out: string[] = []
+  let below: number | null = null
+  for (const block of blocks) {
+    const marked = TABLE_GAPS.exec(block)
+    const xml = marked ? block.slice(marked[0].length) : block
+    const isTable = /^<w:tbl[\s>]/.test(xml)
+    if (below !== null) {
+      const widened = isTable ? null : withParagraphSpacing(xml, 'before', below)
+      if (widened !== null) {
+        out.push(widened)
+        below = null
+        continue
+      }
+      if (!isTable && below > 0) out.push(gapParagraph(below))
+    }
+    if (marked) {
+      const top = Number(marked[1])
+      if (below !== null) {
+        // two tables in a row need a paragraph between them anyway (Word merges them)
+        out.push(gapParagraph(Math.max(0, below) + top))
+      } else if (top > 0) {
+        const widened =
+          out.length > 0 ? withParagraphSpacing(out[out.length - 1], 'after', top) : null
+        if (widened !== null) out[out.length - 1] = widened
+        else out.push(gapParagraph(top))
+      }
+      below = Number(marked[2])
+    } else if (below !== null && isTable) {
+      out.push(gapParagraph(Math.max(0, below)))
+      below = null
+    } else {
+      below = null
+    }
+    out.push(xml)
+  }
+  if (below !== null && closeWithGap) out.push(gapParagraph(Math.max(0, below)))
+  return out
+}
+
 /**
  * Where the table sits across the column: a table set like a character
- * (treatAsChar) follows its host paragraph's alignment, a placed one its
- * horizontal alignment and offset. Vertical placement is the flow position.
+ * (treatAsChar) sits in its host line inside its outer margins, a placed one
+ * at its horizontal alignment and offset. Vertical placement is the flow
+ * position. `textInsetTw` is the first cell's left margin, which w:tblInd
+ * measures to in a document without compatibilityMode.
  */
-function tablePlacementXml(tbl: XNode, hostAlign?: string): string {
+function tablePlacementXml(
+  tbl: XNode,
+  host: TableHost,
+  widthTw: number,
+  textInsetTw: number,
+): string {
   const pos = firstChild(tbl, 'hp:pos')
   if (attr(pos, 'treatAsChar') === '1') {
-    return hostAlign === 'center' || hostAlign === 'right' ? `<w:jc w:val="${hostAlign}"/>` : ''
+    const out = firstChild(tbl, 'hp:outMargin')
+    const leftTw = hwpToTwips(intAttr(out, 'left', 0))
+    const rightTw = hwpToTwips(intAttr(out, 'right', 0))
+    const objectTw = widthTw + leftTw + rightTw
+    const aligned = host.align === 'center' || host.align === 'right'
+    // Word's centring is the same box when nothing is lopsided
+    if (
+      host.align === 'center' &&
+      host.startTw === 0 &&
+      host.endTw === 0 &&
+      leftTw === rightTw &&
+      (host.roomTw === null || objectTw <= host.roomTw)
+    ) {
+      return '<w:jc w:val="center"/>'
+    }
+    if (aligned && host.roomTw === null) return `<w:jc w:val="${host.align}"/>`
+    // a table wider than its line starts at the line's start whatever the
+    // alignment (korea-156787237's 478pt title box in a 482pt line)
+    let ruleTw = host.startTw + leftTw
+    if (aligned && host.roomTw !== null && objectTw <= host.roomTw) {
+      const slack = host.roomTw - objectTw
+      ruleTw += host.align === 'center' ? slack / 2 : slack
+    }
+    const indent = Math.round(ruleTw + textInsetTw)
+    return indent !== 0 ? `<w:tblInd w:w="${indent}" w:type="dxa"/>` : ''
   }
   const horz = attr(pos, 'horzAlign')
   if (attr(pos, 'horzRelTo') === 'PAGE') return ''
@@ -1463,6 +1765,7 @@ async function cellInfo(tc: XNode, rowIndex: number, ctx: Ctx): Promise<CellInfo
     ctx.cell = outerCell
     ctx.tableMarginHwp = outerMargin
   }
+  blocks.splice(0, blocks.length, ...settleTableGaps(blocks, true))
   // OOXML: a cell's last child must be a paragraph
   if (blocks.length === 0 || /^<w:tbl[\s>]/.test(blocks[blocks.length - 1])) blocks.push('<w:p/>')
   return {

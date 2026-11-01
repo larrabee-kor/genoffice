@@ -7359,6 +7359,23 @@ body.docs-crop-active .doc-protected[data-doc-protected='image'] .doc-img-wrap {
   top: var(--doc-lead-shift);
 }
 
+/* Hangul sets a line's glyphs at its top and the line gap under them: the
+   baseline lies 0.85 of the text height below the line's top (every saved
+   lineseg: baseline 1190 of textheight 1400), where Word's exact line puts it
+   at 0.8 of the rule. Chromium centres the face box in the line (the compat
+   faces' typo ascent 0.88 / descent 0.12 em: a centred baseline 0.38 em below
+   the middle, measured in a 22.4pt exact line of 14pt text), so the shift is
+   0.85 em minus that centred baseline. Display-only like --doc-lead-exact; after the rule above, which it
+   overrides at the same specificity. */
+.doc-page .doc-hwp-lh-exact {
+  --doc-lead-exact: calc(0.85em - 0.5 * var(--doc-lh-cap) - 0.38em);
+}
+
+/* the shift moves glyphs only: a picture keeps hanging from the line's top */
+.doc-page .doc-hwp-lh-exact .doc-inline-img--hwp {
+  translate: 0 calc(-1 * var(--doc-lead-shift, 0px));
+}
+
 /* anchored pictures measure from the paragraph box, not from its glyphs */
 .doc-page .doc-anchor-origin .doc-inline-img-anchor > img {
   translate: 0 calc(-1 * var(--doc-lead-shift, 0px));

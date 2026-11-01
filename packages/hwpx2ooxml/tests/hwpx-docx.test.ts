@@ -387,6 +387,48 @@ describe('convertHwpxToDocx', () => {
     expect(doc).toMatch(/<w:spacing w:after="120" w:line="\d+" w:lineRule="atLeast"\/>/)
   })
 
+  it('sets a table placed like a character inside its outer margins', async () => {
+    // Hangul's line is the table plus its 2.83pt outer margins (3000 + 283 +
+    // 283), then the 5pt line gap; the rules start 2.83pt into the line
+    const table = (pos: string, width: number) =>
+      `<hp:tbl rowCnt="1" colCnt="3" borderFillIDRef="1"><hp:sz width="${width}" height="3000"/>${pos}` +
+      `<hp:outMargin left="283" right="283" top="283" bottom="283"/><hp:inMargin left="141" right="141" top="141" bottom="141"/>` +
+      `<hp:tr>${cell(0, 0, '가')}${cell(1, 0, '나')}${cell(2, 0, '다')}</hp:tr></hp:tbl>`
+    const line = (horzsize: number) =>
+      `<hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="3566" textheight="3566" baseline="3031" spacing="500" horzpos="0" horzsize="${horzsize}" flags="0"/></hp:linesegarray>`
+    const asChar = '<hp:pos treatAsChar="1"/>'
+    const placed = '<hp:pos treatAsChar="0" horzRelTo="PARA" horzAlign="LEFT" horzOffset="0"/>'
+    const xml = section(
+      `<hp:p paraPrIDRef="2"><hp:run charPrIDRef="0">${SEC_PR}${table(asChar, 30000)}</hp:run>${line(40000)}</hp:p>` +
+        `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>본문</hp:t></hp:run></hp:p>` +
+        // centred but wider than its 302pt line: Hangul starts it at the line's start
+        `<hp:p paraPrIDRef="1"><hp:run charPrIDRef="0">${table(asChar, 30000)}</hp:run>${line(30200)}</hp:p>` +
+        `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>끝</hp:t></hp:run></hp:p>` +
+        // a placed table's outer margins are its wrap distance: no gaps
+        `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${table(placed, 30000)}</hp:run></hp:p>`,
+    )
+    const doc = await documentXml((await convertHwpxToDocx(await hwpx(xml))).docx)
+    const tables = doc.split('<w:tbl>').slice(1)
+    const tblPr = (xml: string) => xml.slice(0, xml.indexOf('</w:tblPr>'))
+    // left indent 100 + outer margin 57 + the first cell's 102 (w:tblInd measures to the text)
+    expect(tblPr(tables[0])).toContain('<w:tblInd w:w="259" w:type="dxa"/>')
+    // first-line start (600 - 400 = 200) + 57 + 102, not centred
+    expect(tblPr(tables[1])).toContain('<w:tblInd w:w="359" w:type="dxa"/>')
+    expect(tblPr(tables[1])).not.toContain('<w:jc ')
+    expect(tblPr(tables[2])).not.toContain('<w:tblInd')
+    // the top margin above the first table, which has no paragraph above it
+    const body = doc.slice(doc.indexOf('<w:body>'))
+    expect(body.slice(0, body.indexOf('<w:tbl>'))).toContain('w:line="57" w:lineRule="exact"')
+    // the bottom margin and line gap (283 + 500 = 157 twips) go above the next paragraph
+    const first = doc.lastIndexOf('<w:p>', doc.indexOf('본문'))
+    expect(doc.slice(first, doc.indexOf('본문'))).toContain('w:before="157"')
+    // the next table's top margin (57) and its paragraph's 5pt before go under that paragraph
+    expect(doc.slice(first, doc.indexOf('<w:tbl>', first))).toContain('w:after="157"')
+    // below the second table: its paragraph's 10pt after plus the 157
+    const last = doc.lastIndexOf('<w:p>', doc.indexOf('끝'))
+    expect(doc.slice(last, doc.indexOf('끝'))).toContain('w:before="357"')
+  })
+
   it("drops the space under a cell's last paragraph", async () => {
     const tc =
       `<hp:tc borderFillIDRef="1" hasMargin="0"><hp:subList vertAlign="CENTER">` +
@@ -418,6 +460,26 @@ describe('convertHwpxToDocx', () => {
     await expect(
       convertHwpxToDocx(await zip.generateAsync({ type: 'uint8array' })),
     ).rejects.toMatchObject({ code: 'not-hwpx' })
+  })
+
+  it('flattens a text box set like a character into its line', async () => {
+    const box = (pos: string, text: string) =>
+      `<hp:rect><hp:drawText><hp:subList><hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>${text}</hp:t></hp:run></hp:p></hp:subList></hp:drawText>` +
+      `<hp:sz width="20000" height="3000"/>${pos}</hp:rect>`
+    const xml = section(
+      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${SEC_PR}<hp:t>앞</hp:t></hp:run></hp:p>` +
+        `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${box('<hp:pos treatAsChar="1"/>', '상자 글')}</hp:run></hp:p>` +
+        `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${box('<hp:pos treatAsChar="0"/>', '떠 있는 상자')}</hp:run></hp:p>`,
+    )
+    const result = await convertHwpxToDocx(await hwpx(xml))
+    const doc = await documentXml(result.docx)
+    const paragraphs = (from: string, to: string) =>
+      doc.slice(doc.indexOf(from), doc.indexOf(to)).match(/<w:p[\s>]/g)?.length ?? 0
+    // the box's text is its line: no empty paragraph is left for the host
+    expect(paragraphs('앞', '상자 글')).toBe(1)
+    // a floating box's host paragraph is a line of its own in Hangul
+    expect(paragraphs('상자 글', '떠 있는 상자')).toBe(2)
+    expect(result.dropped).toContainEqual(expect.objectContaining({ what: 'textboxes-flattened' }))
   })
 
   it('counts what it drops instead of guessing', async () => {
