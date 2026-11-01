@@ -129,12 +129,24 @@ function borderSide(node: XNode | null): BorderSide | null {
   if (!node) return null
   const type = attr(node, 'type') ?? 'NONE'
   if (type === 'NONE') return null
+  const val = BORDER_VAL[type] ?? 'single'
+  const total = widthToEighths(attr(node, 'width'))
   return {
-    val: BORDER_VAL[type] ?? 'single',
-    sz: widthToEighths(attr(node, 'width')),
+    val,
+    // Hangul's width is the whole compound line; Word's w:sz is one stroke of
+    // it and the gap repeats it (a 0.5 mm double drew 4pt apart, Hangul 2pt)
+    sz: COMPOUND.has(val) ? Math.max(2, Math.round(total / 3)) : total,
     color: hexColor(attr(node, 'color')) ?? '000000',
   }
 }
+
+/** compound lines: Word draws two strokes of w:sz with a gap of the same width */
+export const COMPOUND = new Set([
+  'double',
+  'thinThickSmallGap',
+  'thickThinSmallGap',
+  'thinThickThinSmallGap',
+])
 
 function slotValue(node: XNode | null, slot: 'hangul' | 'latin'): string | undefined {
   return attr(node, slot)

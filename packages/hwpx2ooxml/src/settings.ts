@@ -27,9 +27,28 @@ const COMPAT = '<w:compat><w:balanceSingleByteDoubleByteWidth/><w:useFELayout/><
 export const HWP_SOURCE_DOC_VAR = 'GenOfficeSourceFormat'
 const DOC_VARS = `<w:docVars><w:docVar w:name="${HWP_SOURCE_DOC_VAR}" w:val="hwp"/></w:docVars>`
 
+/**
+ * The document language, Korean: without a w:lang Word (and GenOffice) keep
+ * the Japanese line rules, hanging or squeezing a closing bracket into the
+ * margin to pull a syllable up (lawgo-7 "…관한 법률」" on one line), which
+ * Hangul never does. CT_RPr puts w:lang after w:szCs.
+ */
+const KOREAN = '<w:lang w:val="ko-KR" w:eastAsia="ko-KR"/>'
+
+async function withKoreanDefaults(zip: JSZip): Promise<void> {
+  const styles = await zip.file('word/styles.xml')?.async('string')
+  if (!styles || /<w:rPrDefault>.*?<w:lang\b.*?<\/w:rPrDefault>/s.test(styles)) return
+  const next = styles.replace(
+    /(<w:rPrDefault><w:rPr>.*?)(<\/w:rPr><\/w:rPrDefault>)/s,
+    `$1${KOREAN}$2`,
+  )
+  if (next !== styles) zip.file('word/styles.xml', next)
+}
+
 export async function withHangulLayoutSettings(docx: Uint8Array): Promise<Uint8Array> {
   const zip = await JSZip.loadAsync(docx)
   if (zip.file('word/settings.xml')) return docx
+  await withKoreanDefaults(zip)
   await addDocumentPart(
     zip,
     'settings.xml',

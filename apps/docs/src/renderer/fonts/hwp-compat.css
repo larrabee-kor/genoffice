@@ -7,9 +7,9 @@
   font-family: 'HWP Compat Batang';
   src: url('./hwp-compat/Batang.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2027,
-    U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E,
-    U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2027, U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015,
+    U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -22,9 +22,9 @@
   font-family: 'HWP Compat BatangChe';
   src: url('./hwp-compat/BatangChe.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2026,
-    U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E,
-    U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2026, U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015,
+    U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -37,9 +37,9 @@
   font-family: 'HWP Compat Dotum';
   src: url('./hwp-compat/Dotum.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2027,
-    U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E,
-    U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2027, U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015,
+    U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -52,9 +52,9 @@
   font-family: 'HWP Compat DotumChe';
   src: url('./hwp-compat/DotumChe.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2026,
-    U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E,
-    U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2026, U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015,
+    U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -67,9 +67,9 @@
   font-family: 'HWP Compat Gulim';
   src: url('./hwp-compat/Gulim.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2027,
-    U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E,
-    U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2027, U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015,
+    U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -82,9 +82,9 @@
   font-family: 'HWP Compat GulimChe';
   src: url('./hwp-compat/GulimChe.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2026,
-    U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E,
-    U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2026, U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015,
+    U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -97,9 +97,9 @@
   font-family: 'HWP Compat Gungsuh';
   src: url('./hwp-compat/Gungsuh.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2027,
-    U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E,
-    U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2027, U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015,
+    U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -112,9 +112,9 @@
   font-family: 'HWP Compat GungsuhChe';
   src: url('./hwp-compat/GungsuhChe.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2026,
-    U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E,
-    U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2026, U+2030, U+2032-2033, U+2039-203C, U+3000-3003, U+3008-3011, U+3013-3015,
+    U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -127,9 +127,9 @@
   font-family: 'HWP Compat HCRBatang';
   src: url('./hwp-compat/HCRBatang.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2010-2016, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2027,
-    U+2030, U+2032-2033, U+2035, U+2039-203C, U+2042, U+2047-2049, U+2051, U+3001-3029, U+302C-302D,
-    U+3030-303F, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2010-2016, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2027, U+2030, U+2032-2033, U+2035, U+2039-203C, U+2042, U+2047-2049, U+2051, U+3001-3029,
+    U+302C-302D, U+3030-303F, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -144,9 +144,9 @@
   font-family: 'HWP Compat HCRDotum';
   src: url('./hwp-compat/HCRDotum.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2010-2016, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2027,
-    U+2030, U+2032-2033, U+2035, U+2039-203C, U+2042, U+2047-2049, U+2051, U+3001-3029, U+302C-302D,
-    U+3030-303F, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2010-2016, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2027, U+2030, U+2032-2033, U+2035, U+2039-203C, U+2042, U+2047-2049, U+2051, U+3001-3029,
+    U+302C-302D, U+3030-303F, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -161,8 +161,8 @@
   font-family: 'HWP Compat HYGothicExtra';
   src: url('./hwp-compat/HYGothicExtra.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -175,8 +175,8 @@
   font-family: 'HWP Compat HYGothicMedium';
   src: url('./hwp-compat/HYGothicMedium.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -189,8 +189,8 @@
   font-family: 'HWP Compat HYGraphicMedium';
   src: url('./hwp-compat/HYGraphicMedium.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -203,8 +203,8 @@
   font-family: 'HWP Compat HYGungSoBold';
   src: url('./hwp-compat/HYGungSoBold.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -217,8 +217,8 @@
   font-family: 'HWP Compat HYHeadLineMedium';
   src: url('./hwp-compat/HYHeadLineMedium.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -231,8 +231,8 @@
   font-family: 'HWP Compat HYMyeongJoExtra';
   src: url('./hwp-compat/HYMyeongJoExtra.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -245,8 +245,8 @@
   font-family: 'HWP Compat HYSinMyeongJoMedium';
   src: url('./hwp-compat/HYSinMyeongJoMedium.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -288,7 +288,7 @@
 @font-face {
   font-family: 'HWP Compat HancomYoonGothic720';
   src: url('./hwp-compat/HancomYoonGothic720.woff2') format('woff2');
-  unicode-range: U+0020-007E, U+00A0, U+2027;
+  unicode-range: U+0020-007E, U+00A0, U+2002, U+2027;
   font-display: block;
 }
 @font-face {
@@ -302,7 +302,7 @@
 @font-face {
   font-family: 'HWP Compat HancomYoonGothic740';
   src: url('./hwp-compat/HancomYoonGothic740.woff2') format('woff2');
-  unicode-range: U+0020-007E, U+00A0, U+2027;
+  unicode-range: U+0020-007E, U+00A0, U+2002, U+2027;
   font-display: block;
 }
 @font-face {
@@ -316,7 +316,7 @@
 @font-face {
   font-family: 'HWP Compat HancomYoonGothic760';
   src: url('./hwp-compat/HancomYoonGothic760.woff2') format('woff2');
-  unicode-range: U+0020-007E, U+00A0, U+2027;
+  unicode-range: U+0020-007E, U+00A0, U+2002, U+2027;
   font-display: block;
 }
 @font-face {
@@ -331,8 +331,8 @@
   font-family: 'HWP Compat HanyangJungGothic';
   src: url('./hwp-compat/HanyangJungGothic.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -345,8 +345,8 @@
   font-family: 'HWP Compat HanyangKyunGothic';
   src: url('./hwp-compat/HanyangKyunGothic.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -359,8 +359,8 @@
   font-family: 'HWP Compat HanyangKyunMyeongJo';
   src: url('./hwp-compat/HanyangKyunMyeongJo.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -373,8 +373,8 @@
   font-family: 'HWP Compat HanyangSinMyeongJo';
   src: url('./hwp-compat/HanyangSinMyeongJo.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030,
-    U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -389,7 +389,7 @@
   unicode-range:
     U+0020-007E, U+00A0-00A1, U+00A4, U+00A7-00A8, U+00AA, U+00AD, U+00B0-00B4, U+00B6-00BA,
     U+00BC-00BF, U+00C6, U+00D0, U+00D7-00D8, U+00DE-00DF, U+00E6, U+00F0, U+00F7-00F8, U+00FE,
-    U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030, U+2032-2033, U+203B,
+    U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030, U+2032-2033, U+203B,
     U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
@@ -403,10 +403,8 @@
   font-family: 'HWP Compat HumanMyeongjo';
   src: url('./hwp-compat/HumanMyeongjo.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00A1, U+00A4, U+00A7-00A8, U+00AA, U+00AD, U+00B0-00B4, U+00B6-00BA,
-    U+00BC-00BF, U+00C6, U+00D0, U+00D7-00D8, U+00DE-00DF, U+00E6, U+00F0, U+00F7-00F8, U+00FE,
-    U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027, U+2030, U+2032-2033, U+203B,
-    U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2015, U+2018-2019, U+201C-201D, U+2020-2021, U+2025-2027,
+    U+2030, U+2032-2033, U+203B, U+3000-3003, U+3008-3011, U+3013-3015, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -419,9 +417,9 @@
   font-family: 'HWP Compat MalgunGothic';
   src: url('./hwp-compat/MalgunGothic.woff2') format('woff2');
   unicode-range:
-    U+0020-007E, U+00A0-00FF, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022, U+2025-2027,
-    U+2030, U+2032-2033, U+2039-203C, U+2047-2049, U+3000-3003, U+3008-3011, U+3013-3015,
-    U+302E-302F, U+3131-318E, U+FF01-FF5E;
+    U+0020-007E, U+00A0-00FF, U+2002, U+2013-2015, U+2018-201A, U+201C-201E, U+2020-2022,
+    U+2025-2027, U+2030, U+2032-2033, U+2039-203C, U+2047-2049, U+3000-3003, U+3008-3011,
+    U+3013-3015, U+302E-302F, U+3131-318E, U+FF01-FF5E;
   font-display: block;
 }
 @font-face {
@@ -435,7 +433,7 @@
   src: url('./hwp-compat/SinmyeongJungmyeongjo.woff2') format('woff2');
   unicode-range:
     U+0020, U+0027-0029, U+002C-003A, U+003F, U+0041-004E, U+0050, U+0052-0057, U+005A, U+0061-0069,
-    U+006B-007A, U+00A0, U+2027;
+    U+006B-007A, U+00A0, U+2002, U+2027;
   font-display: block;
 }
 @font-face {

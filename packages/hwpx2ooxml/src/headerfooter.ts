@@ -148,7 +148,8 @@ export async function withHeaderFooter(
 
   const docPath = 'word/document.xml'
   let document = await zip.file(docPath)!.async('string')
-  const at = document.lastIndexOf('<w:sectPr')
+  // the first section carries the references; later ones inherit them
+  const at = document.indexOf('<w:sectPr')
   if (at >= 0) {
     const end = document.indexOf('</w:sectPr>', at)
     let sect = document.slice(at, end + '</w:sectPr>'.length)

@@ -12,19 +12,41 @@ interface ParaHead {
   numFormat: string
   /** template, ^n = the counter of level n */
   text: string
+  /** autoIndent: the following lines start where the text after the head does */
+  autoIndent: boolean
+  /** gap between the head and the text: a share of the glyph size (PERCENT) or HWPUNIT */
+  textOffset: { percent: boolean; value: number }
+}
+
+/** a paragraph head as it shows in front of the text */
+export interface Head {
+  text: string
+  autoIndent: boolean
+  textOffset: { percent: boolean; value: number }
 }
 
 export interface HeadingTables {
-  bullet(id: string | undefined): string | undefined
+  bullet(id: string | undefined): Head | undefined
   level(numberingId: string | undefined, level: number): ParaHead | undefined
 }
 
+function headLayout(node: XNode | undefined): Omit<Head, 'text'> {
+  return {
+    autoIndent: attr(node, 'autoIndent') === '1',
+    textOffset: {
+      percent: (attr(node, 'textOffsetType') ?? 'PERCENT') === 'PERCENT',
+      value: node ? intAttr(node, 'textOffset', 50) : 50,
+    },
+  }
+}
+
 export function readHeadings(root: XNode[]): HeadingTables {
-  const bullets = new Map<string, string>()
+  const bullets = new Map<string, Head>()
   for (const node of descendants(root, 'hh:bullet')) {
     const id = attr(node, 'id')
     const char = attr(node, 'char')
-    if (id !== undefined && char) bullets.set(id, char)
+    const layout = headLayout(elements(node).find((child) => child.name === 'hh:paraHead')?.node)
+    if (id !== undefined && char) bullets.set(id, { text: char, ...layout })
   }
   const numberings = new Map<string, Map<number, ParaHead>>()
   for (const node of descendants(root, 'hh:numbering')) {
@@ -37,6 +59,7 @@ export function readHeadings(root: XNode[]): HeadingTables {
         start: intAttr(head.node, 'start', 1),
         numFormat: attr(head.node, 'numFormat') ?? 'DIGIT',
         text: textContent(head.node),
+        ...headLayout(head.node),
       })
     }
     numberings.set(id, levels)
@@ -59,12 +82,12 @@ export class HeadingCounter {
 
   constructor(private readonly tables: HeadingTables) {}
 
-  /** the head text of a paragraph, advancing the counters; undefined when there is none */
+  /** the head of a paragraph, advancing the counters; undefined when there is none */
   next(
     kind: 'bullet' | 'number' | 'outline',
     idRef: string | undefined,
     level0: number,
-  ): string | undefined {
+  ): Head | undefined {
     if (kind === 'bullet') return this.tables.bullet(idRef)
     const level = Math.min(10, Math.max(1, level0 + 1))
     const head = this.tables.level(idRef, level)
@@ -74,11 +97,14 @@ export class HeadingCounter {
     counts[level] = (counts[level] ?? head.start - 1) + 1
     counts.length = level + 1 // deeper levels restart
     this.counters.set(idRef, counts)
-    return head.text.replace(/\^(\d+)/g, (_, n: string) => {
+    // a caret without a level number shows nothing ("^  □" draws "  □")
+    const text = head.text.replace(/\^(\d*)/g, (_, n: string) => {
+      if (!n) return ''
       const l = Number(n)
       const fmt = this.tables.level(idRef, l)?.numFormat ?? 'DIGIT'
       return formatNumber(Math.max(1, counts[l] ?? 1), fmt)
     })
+    return text ? { text, autoIndent: head.autoIndent, textOffset: head.textOffset } : undefined
   }
 }
 

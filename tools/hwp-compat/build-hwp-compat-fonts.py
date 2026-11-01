@@ -55,6 +55,8 @@ SOURCES = {
 # ASCII names for faces whose rhwp entry is itself Korean
 SLUGS = {
     "휴먼명조": "HumanMyeongjo",
+    # the measured overlay entry; the face keeps its first published name
+    "HumanMyeongJo": "HumanMyeongjo",
     "휴먼고딕": "HumanGothic",
     "한컴 윤고딕 720": "HancomYoonGothic720",
     "한컴 윤고딕 740": "HancomYoonGothic740",
@@ -68,11 +70,19 @@ SLUGS = {
 # isolated runs), as in rhwp's 한컴바탕 table (0.174); sans faces borrow 한컴돋움
 BORROWED = {0x2027: {"serif": "한컴바탕", "sans": "한컴돋움"}}
 
+# Per-face corrections to rhwp's tables. 휴먼명조's middle dot has two Hancom
+# realizations (rhwp font_metrics_overlays #7092): 1.000 em where Hangul draws
+# the TrueType face (n=36), 0.384 where it substitutes an HFT subset; rhwp
+# keeps 0.30. The government PDFs in the corpus are TrueType ones (k289,
+# k042 wrap like the original only at 1.000)
+OVERRIDES = {"휴먼명조": {0x00B7: 1000}}
+
 # Hangul sets a space half an em wide unless the character shape asks for the
 # face's own space (charPr useFontSpace="1"; 2 of 3,015 shapes in the corpus):
 # lawgo-23 indents with HY신명조 spaces of 0.48-0.50 em although the face's own
-# space is 0.333 em
-HALF_EM_SPACE = {0x0020: 500, 0x00A0: 500}
+# space is 0.333 em. The en space carries the converter's head gaps and fixed-
+# width spaces (hwpx2ooxml fixedSpaceRun), so it is half an em in every face.
+HALF_EM_SPACE = {0x0020: 500, 0x00A0: 500, 0x2002: 500}
 
 # Hancom's Latin faces lay out with the Latin face rhwp's registry names for
 # them (font_rule_registry_v2 style-fallback): installed under that name on
@@ -183,6 +193,8 @@ def main() -> None:
                 table["advances"][f"{cp:04X}"] = adv
             continue
         for cp, adv in HALF_EM_SPACE.items():
+            table["advances"][f"{cp:04X}"] = adv
+        for cp, adv in OVERRIDES.get(face, {}).items():
             table["advances"][f"{cp:04X}"] = adv
         for cp, donors in BORROWED.items():
             donor = donors.get(entry["class"])

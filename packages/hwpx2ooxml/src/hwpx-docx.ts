@@ -18,6 +18,7 @@
  */
 
 import {
+  applySectionSettings,
   buildBlankDocx,
   generateParagraphXml,
   inlinePictureDrawingXml,
@@ -33,11 +34,12 @@ import {
 } from '../../docx-engine/src/index'
 import { bmpToPng } from './bmp'
 import { withFontTable } from './fonts'
-import { condensedSpaces, plainParagraph, type PlainChar } from './condense'
+import { advancePt, condensedSpaces, plainParagraph, type PlainChar } from './condense'
 import { withHeaderFooter, type HeaderFooterParts } from './headerfooter'
-import { HeadingCounter, readHeadings } from './numbering'
+import { HeadingCounter, readHeadings, type Head } from './numbering'
 import { withHangulLayoutSettings } from './settings'
 import {
+  COMPOUND,
   readHeader,
   type BorderFill,
   type BorderSide,
@@ -103,12 +105,16 @@ interface Ctx {
   /** resolved BinData → token, so a logo repeated on every page lands once */
   pictureCache: Map<string, { token: string; widthPx: number; heightPx: number } | null>
   section: SectionSettings | null
+  /** the sheet of the section being written (its hp:secPr) */
+  current: SectionSettings | null
   /** nesting depth of tables being written (cells inside cells) */
   tableDepth: number
   headings: HeadingCounter
   /** the cell whose paragraphs are being written: its content height and vertical alignment */
   cell: {
     contentHwp: number
+    /** width inside the cell's left and right margins */
+    textWidthHwp: number
     marginsHwp: number
     vAlign: CellInfo['vAlign']
     overHwp: number
@@ -119,7 +125,7 @@ interface Ctx {
   page: number
   lastVertpos: number
   /** the table default vertical cell margins (hp:inMargin) of the table being written */
-  tableMarginHwp: { top: number; bottom: number }
+  tableMarginHwp: { top: number; bottom: number; left: number; right: number }
   /** numbering the section's outline levels use (hp:secPr outlineShapeIDRef) */
   outlineId: string
 }
@@ -132,7 +138,7 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
     header: readHeader(pack.header),
     headings: new HeadingCounter(readHeadings(pack.header)),
     cell: null,
-    tableMarginHwp: { top: 0, bottom: 0 },
+    tableMarginHwp: { top: 0, bottom: 0, left: 0, right: 0 },
     hf: {
       header: null,
       footer: null,
@@ -151,30 +157,33 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
     pictureSeq: 0,
     pictureCache: new Map(),
     section: null,
+    current: null,
     tableDepth: 0,
   }
 
   const body: string[] = []
+  let ended: SectionSettings | null = null
   for (const [index, root] of pack.sections.entries()) {
     const sec = root.find((node) => nodeName(node) === 'hs:sec')
     if (!sec) continue
-    if (index > 0) {
+    if (index > 0 && body.length > 0) {
       // trailing empty lines of the previous section only pad the page before
       // the break; where a wider fallback font pushes them over, they would
       // leave a blank page behind
-      while (body.length > 0 && isEmptyParagraph(body[body.length - 1])) body.pop()
+      while (body.length > 1 && isEmptyParagraph(body[body.length - 1])) body.pop()
+      // each Hangul section keeps its own sheet (a landscape result table
+      // after portrait pages): Word closes a section in its last paragraph
+      endSection(body, ctx.current)
+      ctx.page++
+      ctx.lastVertpos = -1
     }
-    const before = body.length
     for (const { name, node } of elements(sec)) {
       if (name !== 'hp:p') continue
-      notePage(node, ctx, index)
+      notePage(node, ctx)
       body.push(...(await paragraphBlocks(node, ctx)))
     }
-    // a later section starts on its own page in nearly every real document
-    // (Hangul's section break); without per-section sectPr this keeps the flow
-    if (index > 0 && body.length > before) body[before] = withPageBreakBefore(body[before])
+    ended = ctx.current
   }
-  if (pack.sections.length > 1) ctx.drops.add('section-settings-merged', pack.sections.length - 1)
 
   const blocks: SaveBlock[] = body.map((xml) => ({ kind: 'xml', xml }))
   // a document that ends on a table needs a paragraph after it (Word merges two
@@ -189,7 +198,7 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
 
   const parsed = await parseDocx(await buildBlankDocx())
   const saved = await saveDocx(parsed, blocks, {
-    ...(ctx.section ? { section: ctx.section } : {}),
+    ...((ended ?? ctx.section) ? { section: (ended ?? ctx.section)! } : {}),
     ...(Object.keys(ctx.pictures).length > 0 ? { newPictures: ctx.pictures } : {}),
   })
   // original font names stay on the runs; the table tells Word/GenOffice how to substitute
@@ -234,9 +243,15 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
 
   // Hangul's condense rule needs the saved line layout matched char by char
   let fitChars: PlainChar[] | null = shape.condense && plainParagraph(p) ? [] : null
+  // the head shares the first saved line with the text
+  let headTw = 0
   const flushFitted = (): void => {
     if (!fitChars) return
-    const squeeze = condensedSpaces(p, fitChars, shape.condense ?? 0, format)
+    const squeeze = condensedSpaces(p, fitChars, shape.condense ?? 0, {
+      ...format,
+      headTw,
+      ...(ctx.cell ? { maxRoomPt: ctx.cell.textWidthHwp / 100 } : {}),
+    })
     let i = 0
     while (i < fitChars.length) {
       const { char } = fitChars[i]
@@ -334,7 +349,16 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
         case 'hp:t': {
           const text = textOfT(node, ctx)
           // Hangul leaves half the glyph size between the head and the text (textOffset 50%)
-          if (head && text) appendText(segments, `${head}\u2002`, char)
+          if (head && text) {
+            appendText(segments, `${head.text}\u2002`, char)
+            headTw = headWidthTw(head, char)
+            // autoIndent: the following lines start under the text, not the head
+            // (a paragraph with its own first-line indent keeps that one)
+            if (head.autoIndent && !format.indentFirstLine) {
+              format.indentLeft = (format.indentLeft ?? 0) + headTw
+              format.indentFirstLine = -headTw
+            }
+          }
           if (text) head = undefined
           // a condensed paragraph's text waits for its line fitting (flush)
           if (fitChars) for (const ch of text) fitChars.push({ ch, char })
@@ -342,8 +366,9 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
           break
         }
         case 'hp:secPr':
+          ctx.current = sectionSettings(node) ?? ctx.current
           if (!ctx.section) {
-            ctx.section = sectionSettings(node)
+            ctx.section = ctx.current
             const margin = firstChild(firstChild(node, 'hp:pagePr'), 'hp:margin')
             ctx.hf.headerDistTw = hwpToTwips(intAttr(margin, 'top', 0))
             ctx.hf.footerDistTw = hwpToTwips(intAttr(margin, 'bottom', 0))
@@ -419,6 +444,17 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
   return out
 }
 
+/** width of a paragraph head and the gap after it, in twips, with Hangul's advances */
+function headWidthTw(head: Head, char: CharShape): number {
+  const size = (char.sizeHalfPoints ?? 20) / 2
+  let pt = 0
+  for (const ch of head.text) {
+    pt += advancePt(ch, char) ?? (/[\u1100-\uffff]/.test(ch) && ch !== ' ' ? size : size / 2)
+  }
+  pt += head.textOffset.percent ? (size * head.textOffset.value) / 100 : head.textOffset.value / 100
+  return Math.round(pt * 20)
+}
+
 /**
  * Per-line height of a paragraph whose last line gap is dropped, from the
  * layout Hangul saved with it (hp:linesegarray): the lines' heights plus the
@@ -448,15 +484,42 @@ async function subListBlocks(owner: XNode, ctx: Ctx): Promise<string[]> {
   return out
 }
 
+/** stand-in for Hangul's fixed-width space (hp:fwSpace) until its run is built */
+const FIXED_SPACE = '\u2005'
+
 function appendText(segments: Segment[], text: string, char: CharShape): void {
   if (!text) return
-  for (const piece of textPieces(text, char)) {
-    const run = runOf(piece.text, char, piece.kind)
-    const last = segments[segments.length - 1]
-    // merge with the previous run when the formatting matches (fewer w:r)
-    if (last && last.kind === 'run' && sameFormat(last.run, run)) last.run.text += piece.text
-    else segments.push({ kind: 'run', run })
+  if (text.includes(FIXED_SPACE)) {
+    text.split(FIXED_SPACE).forEach((part, index) => {
+      if (index > 0) pushRun(segments, fixedSpaceRun(char))
+      appendText(segments, part, char)
+    })
+    return
   }
+  for (const piece of textPieces(text, char)) pushRun(segments, runOf(piece.text, char, piece.kind))
+}
+
+/** append a run, merged into the previous one when the formatting matches (fewer w:r) */
+function pushRun(segments: Segment[], run: Run): void {
+  const last = segments[segments.length - 1]
+  if (last && last.kind === 'run' && sameFormat(last.run, run)) last.run.text += run.text
+  else segments.push({ kind: 'run', run })
+}
+
+/**
+ * Hangul's fixed-width space (고정폭 빈칸) is a quarter of the glyph size wide,
+ * letter spacing included (korea-156787289 "위원장 : 출입국" at 14pt -8%:
+ * 3.2pt; korea-156787338 at 18pt: 4.4pt), and justification leaves it alone.
+ * An en space, which no justifier stretches, carries it: half an em in the
+ * compat faces, brought down to the quarter by its letter spacing.
+ */
+function fixedSpaceRun(char: CharShape): Run {
+  const run = runOf('\u2002', char)
+  const size = (char.sizeHalfPoints ?? 20) / 2
+  const ratio = (char.scalePct ?? 100) / 100
+  const spacing = (char.spacingPct ?? 0) / 100
+  run.charSpacingTwips = Math.round(20 * size * ratio * (0.25 * (1 + spacing) - 0.5))
+  return run
 }
 
 type PieceKind = 'wide' | 'other'
@@ -553,7 +616,7 @@ function textOfT(t: XNode, ctx: Ctx): string {
         out += '\n'
         break
       case 'hp:fwSpace':
-        out += '　'
+        out += FIXED_SPACE
         break
       case 'hp:nbSpace':
         out += ' '
@@ -657,19 +720,35 @@ function isEmptyParagraph(xml: string): boolean {
   )
 }
 
-function withPageBreakBefore(xml: string): string {
-  if (!/^<w:p[\s>]/.test(xml) || xml.includes('<w:pageBreakBefore/>')) return xml
-  if (xml.includes('<w:pPr>')) return xml.replace('<w:pPr>', '<w:pPr><w:pageBreakBefore/>')
-  return xml.replace(/^<w:p\b[^>]*>/, (open) => `${open}<w:pPr><w:pageBreakBefore/></w:pPr>`)
+/**
+ * Close the section the body ends with: its sheet as a paragraph-level
+ * sectPr in the last paragraph (a closing table gets a 1pt paragraph for it).
+ */
+function endSection(body: string[], settings: SectionSettings | null): void {
+  if (!settings) return
+  const base =
+    '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>' +
+    '<w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>'
+  const sectPr = applySectionSettings(base, settings)
+  const last = body[body.length - 1]
+  if (last && /^<w:p[\s>]/.test(last) && !last.includes('<w:sectPr')) {
+    body[body.length - 1] = last.includes('</w:pPr>')
+      ? last.replace('</w:pPr>', `${sectPr}</w:pPr>`)
+      : last.replace(/^<w:p\b[^>]*?(\/?)>/, (open, selfClose: string) =>
+          selfClose ? `<w:p><w:pPr>${sectPr}</w:pPr></w:p>` : `${open}<w:pPr>${sectPr}</w:pPr>`,
+        )
+    return
+  }
+  body.push(TABLE_END_PARAGRAPH.replace('</w:pPr>', `${sectPr}</w:pPr>`))
 }
 
 /** a new page starts where a top-level paragraph's first line goes back up the page */
-function notePage(p: XNode, ctx: Ctx, sectionIndex: number): void {
+function notePage(p: XNode, ctx: Ctx): void {
   const array = firstChild(p, 'hp:linesegarray')
   const first = array ? elements(array).find((seg) => seg.name === 'hp:lineseg') : undefined
   if (!first) return
   const vertpos = intAttr(first.node, 'vertpos', 0)
-  if (sectionIndex > 0 || attr(p, 'pageBreak') === '1' || vertpos < ctx.lastVertpos) ctx.page++
+  if (attr(p, 'pageBreak') === '1' || vertpos < ctx.lastVertpos) ctx.page++
   ctx.lastVertpos = vertpos
 }
 
@@ -738,6 +817,9 @@ function sectionSettings(secPr: XNode): SectionSettings | null {
     marginBottom: m('bottom') + m('footer'),
     marginLeft: m('left') + m('gutter'),
     marginRight: m('right'),
+    // the header and footer bands begin at Hangul's own top/bottom margins
+    headerDist: m('top'),
+    footerDist: m('bottom'),
     pageBorder: false,
     columns: 1,
   }
@@ -993,6 +1075,8 @@ async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<strin
     const tableMarginHwp = {
       top: intAttr(inMarginNode, 'top'),
       bottom: intAttr(inMarginNode, 'bottom'),
+      left: intAttr(inMarginNode, 'left'),
+      right: intAttr(inMarginNode, 'right'),
     }
     for (const { name, node: tr } of elements(tbl)) {
       if (name !== 'hp:tr') continue
@@ -1048,18 +1132,32 @@ async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<strin
         `${tablePlacementXml(tbl, hostAlign)}<w:tblLayout w:type="fixed"/>${defaultMar}<w:tblLook w:val="0000"/></w:tblPr>`,
       `<w:tblGrid>${colTw.map((width) => `<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>`,
     ]
+    // Hangul never splits a table set like a character across pages: one that
+    // fits moves to the next page whole (lawgo-17's second-page form), so its
+    // rows are kept together and with the next row
+    const whole =
+      ctx.tableDepth === 1 &&
+      attr(firstChild(tbl, 'hp:pos'), 'treatAsChar') === '1' &&
+      hwpToTwips(intAttr(firstChild(tbl, 'hp:sz'), 'height', 0)) <= bodyHeightTwips(ctx)
     for (let r = 0; r < rows; r++) {
       let contentTw = rowContentHeight(r, rowHeights[r], cells, tableMargin)
       // a row Hangul split across pages declares the sum of its pieces; as a
       // Word floor it would pad the last page and spill onto a blank one
       if (contentTw > bodyHeightTwips(ctx)) contentTw = 0
-      const trPr =
-        contentTw > 0 ? `<w:trPr><w:trHeight w:val="${contentTw}" w:hRule="atLeast"/></w:trPr>` : ''
+      const rowPr =
+        (contentTw > 0 ? `<w:trHeight w:val="${contentTw}" w:hRule="atLeast"/>` : '') +
+        (whole ? '<w:cantSplit/>' : '')
+      const trPr = rowPr ? `<w:trPr>${rowPr}</w:trPr>` : ''
+      // Word chains a row to the next by its first cell's first paragraph
+      const keep = whole && r < rows - 1
       parts.push(`<w:tr>${trPr}`)
       for (let c = 0; c < cols; c++) {
         const cell = grid[r][c]
         if (!cell) {
-          parts.push(`<w:tc><w:tcPr><w:tcW w:w="${colTw[c]}" w:type="dxa"/></w:tcPr><w:p/></w:tc>`)
+          const empty = keep && c === 0 ? withKeepNext('<w:p/>') : '<w:p/>'
+          parts.push(
+            `<w:tc><w:tcPr><w:tcW w:w="${colTw[c]}" w:type="dxa"/></w:tcPr>${empty}</w:tc>`,
+          )
           continue
         }
         if (c !== cell.col) continue // horizontal span shadow: gridSpan covers it
@@ -1080,9 +1178,9 @@ async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<strin
           )
         }
         tcPr.push(`<w:vAlign w:val="${cell.vAlign}"/>`)
-        parts.push(
-          `<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr>${origin ? cell.contentXml : '<w:p/>'}</w:tc>`,
-        )
+        let content = origin ? cell.contentXml : '<w:p/>'
+        if (keep && c === 0) content = withKeepNext(content)
+        parts.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr>${content}</w:tc>`)
       }
       parts.push('</w:tr>')
     }
@@ -1091,6 +1189,19 @@ async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<strin
   } finally {
     ctx.tableDepth--
   }
+}
+
+/** the first paragraph of a cell's content with keep-with-next set (CT_PPr: after pStyle) */
+function withKeepNext(xml: string): string {
+  const m = /<w:p\/>|<w:p>(<w:pPr>(?:<w:pStyle [^>]*\/>)?)?/.exec(xml)
+  if (!m) return xml
+  const pPr = /^<w:p><w:pPr>(.*?)<\/w:pPr>/.exec(xml.slice(m.index))
+  if (pPr && pPr[1].includes('<w:keepNext')) return xml
+  let next: string
+  if (m[0] === '<w:p/>') next = '<w:p><w:pPr><w:keepNext/></w:pPr></w:p>'
+  else if (m[1]) next = `<w:p>${m[1]}<w:keepNext/>`
+  else next = '<w:p><w:pPr><w:keepNext/></w:pPr>'
+  return xml.slice(0, m.index) + next + xml.slice(m.index + m[0].length)
 }
 
 /**
@@ -1125,13 +1236,14 @@ function pageNumberRunPr(ctx: Ctx): string {
 
 /** usable page height (A4 with Hangul's default margins until a secPr is read) */
 function bodyHeightTwips(ctx: Ctx): number {
-  const section = ctx.section
+  const section = ctx.current ?? ctx.section
   if (!section) return 13606
   return section.pageHeight - section.marginTop - section.marginBottom
 }
 
-/** border width in twips (w:sz is eighths of a point) */
-const borderTwips = (side: BorderSide | null): number => (side ? side.sz * 2.5 : 0)
+/** rendered border width in twips (w:sz is eighths of a point; a double line is three of them) */
+const borderTwips = (side: BorderSide | null): number =>
+  side ? side.sz * 2.5 * (COMPOUND.has(side.val) ? 3 : 1) : 0
 
 /**
  * Hangul's cell height is the whole row: content, the vertical cell margins
@@ -1178,8 +1290,12 @@ async function cellInfo(tc: XNode, rowIndex: number, ctx: Ctx): Promise<CellInfo
   const blocks: string[] = []
   const outerCell = ctx.cell
   const outerMargin = ctx.tableMarginHwp
+  const sidesHwp = marginNode
+    ? intAttr(marginNode, 'left') + intAttr(marginNode, 'right')
+    : ctx.tableMarginHwp.left + ctx.tableMarginHwp.right
   const cell = {
     contentHwp: intAttr(size, 'height', 0) - marginsHwp,
+    textWidthHwp: intAttr(size, 'width', 0) - sidesHwp,
     marginsHwp,
     vAlign,
     overHwp: 0,
@@ -1221,59 +1337,53 @@ async function cellInfo(tc: XNode, rowIndex: number, ctx: Ctx): Promise<CellInfo
 }
 
 /**
- * Column widths from the cells: each cell spans a known distance between two
- * column boundaries, so the boundaries follow from the left edge; any the
- * cells leave open split the remaining width evenly.
+ * Column widths from the cells. Hangul draws a table on one grid whatever its
+ * cells claim: the right edge is the table's own width, the boundaries come
+ * from the narrowest cells, and a wider cell that disagrees is stretched to
+ * the grid (lawgo-7 draws a 44790 heading over 2830 + 18839 + 23791 columns
+ * across all 45460; lawgo-17 draws 22 cells of 38933 out to the 50897 edge).
+ * So the boundaries are settled from the edges inward, narrow cells first,
+ * each on the value most of its cells agree on; any the cells leave open
+ * split the remaining width evenly.
  */
 function columnWidths(cells: CellInfo[], cols: number, tableWidth: number): number[] {
-  // every cell pins the distance between two column boundaries; propagate
-  // the boundary positions from the left edge (and back from the right)
   const x: Array<number | null> = Array.from({ length: cols + 1 }, () => null)
   x[0] = 0
-  // narrow cells first: a wide merged cell may disagree with the columns it
-  // covers (Hangul keeps a 44790 heading over 2830 + 18839 + 23791 columns)
-  const bySpan = [...cells].sort((a, b) => a.colSpan - b.colSpan)
-  for (let pass = 0; pass < cols + 2; pass++) {
-    let changed = false
-    for (const cell of bySpan) {
-      if (cell.widthHwp <= 0) continue
-      const a = cell.col
-      const b = Math.min(cols, cell.col + cell.colSpan)
-      if (a >= b) continue
-      if (x[a] !== null && x[b] === null) {
-        x[b] = x[a]! + cell.widthHwp
-        changed = true
-      } else if (x[b] !== null && x[a] === null) {
-        x[a] = x[b]! - cell.widthHwp
-        changed = true
-      }
-    }
-    if (!changed) break
-  }
-  if (x[cols] === null) x[cols] = tableWidth > 0 ? tableWidth : 48000
-  // Hangul's cells do not always agree (row sums differ): settle every
-  // boundary on the mean of what the cells touching it imply, a least-squares
-  // fit the majority of agreeing cells dominates
+  if (tableWidth > 0) x[cols] = tableWidth
   const constraints = cells
     .filter((cell) => cell.widthHwp > 0 && cell.col < cols)
     .map((cell) => ({ a: cell.col, b: Math.min(cols, cell.col + cell.colSpan), w: cell.widthHwp }))
-  for (let iteration = 0; iteration < 60; iteration++) {
-    for (let k = 1; k <= cols; k++) {
-      if (x[k] === null) continue
-      let sum = 0
-      let n = 0
-      for (const c of constraints) {
-        if (c.b === k && x[c.a] !== null) {
-          sum += x[c.a]! + c.w
-          n++
-        } else if (c.a === k && x[c.b] !== null) {
-          sum += x[c.b]! - c.w
-          n++
-        }
+    .filter((c) => c.a < c.b)
+  const widest = constraints.reduce((max, c) => Math.max(max, c.b - c.a), 0)
+  for (let span = 1; span <= widest; span++) {
+    for (let pass = 0; pass <= cols; pass++) {
+      // the votes for each open boundary from cells of this span or narrower
+      const votes = new Map<number, Map<number, number>>()
+      const vote = (k: number, value: number): void => {
+        const tally = votes.get(k) ?? new Map<number, number>()
+        tally.set(value, (tally.get(value) ?? 0) + 1)
+        votes.set(k, tally)
       }
-      if (n > 0) x[k] = sum / n
+      for (const c of constraints) {
+        if (c.b - c.a > span) continue
+        if (x[c.a] !== null && x[c.b] === null) vote(c.b, x[c.a]! + c.w)
+        else if (x[c.b] !== null && x[c.a] === null) vote(c.a, x[c.b]! - c.w)
+      }
+      if (votes.size === 0) break
+      for (const [k, tally] of votes) {
+        let best = 0
+        let count = -1
+        for (const [value, n] of tally) {
+          if (n > count) {
+            best = value
+            count = n
+          }
+        }
+        x[k] = best
+      }
     }
   }
+  if (x[cols] === null) x[cols] = 48000
   // boundaries no cell pins: spread evenly between the known ones
   for (let c = 1; c < cols; c++) {
     if (x[c] !== null) continue
@@ -1282,6 +1392,8 @@ function columnWidths(cells: CellInfo[], cols: number, tableWidth: number): numb
     const prev = x[c - 1]!
     x[c] = prev + (x[next]! - prev) / (next - c + 1)
   }
+  // a boundary placed past its neighbour (cells that contradict each other
+  // outright) leaves that column a sliver instead of a negative width
   return Array.from({ length: cols }, (_, c) => Math.max(1, Math.round(x[c + 1]! - x[c]!)))
 }
 

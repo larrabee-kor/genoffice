@@ -19,6 +19,7 @@ Usage: python3 tools/hwp-compat/extract-rhwp-metrics.py <rhwp checkout> [out.jso
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -167,7 +168,17 @@ def main() -> None:
 
     faces = {}
     for face, cls in FACES.items():
-        target = face if find(face, False) else (alias.get(face) or LATIN_LAYOUT.get(face))
+        # rhwp resolves the registry alias before the name itself, and the
+        # alias leads to the measured overlay (휴먼명조 -> HumanMyeongJo: '·'
+        # 0.30 em measured from Hancom PDFs where the generated table says 1.00)
+        aliased = alias.get(face)
+        target = (
+            aliased
+            if aliased and find(aliased, False)
+            else face
+            if find(face, False)
+            else LATIN_LAYOUT.get(face)
+        )
         regular = find(target, False) if target else None
         if not regular:
             print(f"skip {face}: no rhwp metric", file=sys.stderr)
@@ -185,6 +196,8 @@ def main() -> None:
         "faces": faces,
     }
     out_path.write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n", encoding="utf8")
+    # the repository's formatter owns the JSON layout (format:check)
+    subprocess.run(["npx", "prettier", "--write", str(out_path)], check=True, capture_output=True)
     print(f"{len(faces)} faces -> {out_path}")
 
 

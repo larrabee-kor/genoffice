@@ -150,7 +150,7 @@ describe('convertHwpxToDocx', () => {
     expect(doc).toContain('<w:ind w:left="100"/>')
   })
 
-  it('drops trailing empty lines before a section break instead of leaving a blank page', async () => {
+  it('closes each section with its own sheet, without trailing empty lines', async () => {
     const empty = '<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"/></hp:p>'
     const zip = new JSZip()
     zip.file('mimetype', 'application/hwp+zip')
@@ -171,8 +171,15 @@ describe('convertHwpxToDocx', () => {
       (await convertHwpxToDocx(await zip.generateAsync({ type: 'uint8array' }))).docx,
     )
     const between = doc.slice(doc.indexOf('첫 구역'), doc.indexOf('둘째 구역'))
-    expect(between.match(/<w:p[\s>]/g) ?? []).toHaveLength(1) // only the break paragraph itself
-    expect(between).toContain('<w:pageBreakBefore/>')
+    expect(between.match(/<w:p[\s>]/g) ?? []).toHaveLength(1) // only the next section's paragraph
+    // the first section closes in its last paragraph with its own sheet
+    const first = doc.slice(
+      doc.lastIndexOf('<w:p>', doc.indexOf('첫 구역')),
+      doc.indexOf('첫 구역'),
+    )
+    expect(first).toMatch(
+      /<w:sectPr><w:pgSz w:w="11906" w:h="16838"\/><w:pgMar [^>]*w:footer="850"/,
+    )
   })
 
   it('spells out Hangul line breaking and auto spacing (Word defaults are the opposite)', async () => {
@@ -217,7 +224,7 @@ describe('convertHwpxToDocx', () => {
     expect(doc).toContain('<w:gridSpan w:val="2"/>')
     expect(doc).toContain('<w:vMerge w:val="restart"/>')
     expect(doc).toMatch(/<w:vMerge\/>/)
-    expect(doc).toContain('<w:top w:val="double" w:sz="11" w:space="0" w:color="FF0000"/>')
+    expect(doc).toContain('<w:top w:val="double" w:sz="4" w:space="0" w:color="FF0000"/>')
     expect(doc).toContain('w:fill="D9D9D9"')
     expect(doc).toContain('<w:vAlign w:val="center"/>')
     expect(doc).toContain('<w:left w:w="102" w:type="dxa"/>')
@@ -237,6 +244,10 @@ describe('convertHwpxToDocx', () => {
     )
     expect(await zip.file('word/_rels/document.xml.rels')!.async('string')).toContain(
       'Target="settings.xml"',
+    )
+    // Korean line rules: no closing bracket hung or squeezed into the margin
+    expect(await zip.file('word/styles.xml')!.async('string')).toMatch(
+      /<w:rPrDefault><w:rPr>.*<w:lang w:val="ko-KR" w:eastAsia="ko-KR"\/><\/w:rPr><\/w:rPrDefault>/,
     )
     const parsed = await parseDocx(docx)
     // and marks the document HWP-origin, so GenOffice draws the Hancom faces with their compat faces

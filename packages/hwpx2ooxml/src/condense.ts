@@ -39,13 +39,18 @@ function advancesOf(face: string): Map<number, number> | null {
 }
 
 const SYLLABLE = /[가-힣]/
-const WIDE = /[ᄀ-ᇿ⺀-鿿豈-﫿＀-｠]/
+// full-width outside the face tables too: jamo, CJK, compatibility forms and
+// the symbols Korean faces set an em wide (※, ①, box drawing, □○, ☞)
+const WIDE =
+  /[\u1100-\u11ff\u203b\u2460-\u24ff\u2500-\u27bf\u2e80-\u9fff\uf900-\ufaff\uff00-\uff60]/
 
 /** advance of one character in points, as Hangul sets it; null when no table covers its face */
 export function advancePt(ch: string, char: CharShape): number | null {
   const size = (char.sizeHalfPoints ?? 20) / 2
   const ratio = (char.scalePct ?? 100) / 100
   const spacing = (char.spacingPct ?? 0) / 100
+  // Hangul's fixed-width space (hwpx-docx FIXED_SPACE): a quarter em
+  if (ch === '\u2005') return size * 0.25 * ratio * (1 + spacing)
   const syllable = SYLLABLE.test(ch)
   const face = syllable || WIDE.test(ch) ? char.fontHangul : (char.fontLatin ?? char.fontHangul)
   const metric = face ? HWP_COMPAT_METRICS[face] : undefined
@@ -65,7 +70,19 @@ export function condensedSpaces(
   p: XNode,
   chars: PlainChar[],
   condense: number,
-  format: { indentLeft?: number; indentRight?: number; indentFirstLine?: number } = {},
+  format: {
+    indentLeft?: number
+    indentRight?: number
+    indentFirstLine?: number
+    /** the paragraph head in front of the first line (twips) */
+    headTw?: number
+    /**
+     * the room the text really has (a cell's width inside its margins):
+     * Hangul may save, and draw, a cell line wider than its cell (lawgo-17
+     * runs 3.7pt past a borderless edge), which Word wraps instead
+     */
+    maxRoomPt?: number
+  } = {},
 ): Map<number, number> {
   const out = new Map<number, number>()
   const array = firstChild(p, 'hp:linesegarray')
@@ -76,16 +93,19 @@ export function condensedSpaces(
       start: intAttr(seg.node, 'textpos', 0),
       room: intAttr(seg.node, 'horzsize', 0) / 100,
     }))
-  for (let k = 0; k < lines.length - 1; k++) {
+  for (let k = 0; k < lines.length; k++) {
     const { start } = lines[k]
     // the saved width is the column's; the paragraph's indents narrow it,
     // the first line by its own indent, the rest by the hanging one
     const indentTw =
       (format.indentLeft ?? 0) +
-      (k === 0 ? (format.indentFirstLine ?? 0) : 0) +
+      (k === 0 ? (format.indentFirstLine ?? 0) + (format.headTw ?? 0) : 0) +
       (format.indentRight ?? 0)
-    const room = lines[k].room - indentTw / 20
-    const end = lines[k + 1].start
+    const room = Math.min(lines[k].room, format.maxRoomPt ?? Infinity) - indentTw / 20
+    // the last line runs to the end; one wider than its room still fit, so
+    // Hangul condensed it too (lawgo-17's space-aligned one-line form rows)
+    const end = k + 1 < lines.length ? lines[k + 1].start : chars.length
+    if (k === lines.length - 1 && end <= start) break
     if (room <= 0 || end <= start || end > chars.length) return new Map()
     let last = end
     while (last > start && chars[last - 1].ch === ' ') last--
@@ -114,15 +134,34 @@ export function condensedSpaces(
   return out
 }
 
-/** a paragraph whose saved layout maps one to one onto its text: plain runs only */
+/** inline marks that take one text position each (hwpx-docx textOfT) */
+const ONE_CHAR = new Set(['hp:fwSpace', 'hp:nbSpace'])
+
+/**
+ * A paragraph whose saved layout maps one to one onto its text: plain runs,
+ * fixed and non-breaking spaces. A column definition (hp:colPr) draws nothing,
+ * but where it sits in the text positions is not known, so it is accepted
+ * only in a one-line paragraph, whose only line starts at 0 anyway.
+ */
 export function plainParagraph(p: XNode): boolean {
+  let controls = false
   for (const run of elements(p)) {
     if (run.name === 'hp:linesegarray') continue
     if (run.name !== 'hp:run') return false
     for (const child of elements(run.node)) {
+      if (child.name === 'hp:ctrl') {
+        if (!elements(child.node).every((c) => c.name === 'hp:colPr')) return false
+        controls = true
+        continue
+      }
       if (child.name !== 'hp:t') return false
-      if (elements(child.node).length > 0) return false
+      if (!elements(child.node).every((c) => ONE_CHAR.has(c.name))) return false
     }
+  }
+  if (controls) {
+    const array = firstChild(p, 'hp:linesegarray')
+    const lines = array ? elements(array).filter((seg) => seg.name === 'hp:lineseg') : []
+    if (lines.length !== 1) return false
   }
   return attr(p, 'paraPrIDRef') !== undefined
 }
