@@ -370,6 +370,23 @@ describe('convertHwpxToDocx', () => {
     expect(doc).toContain('w:line="432" w:lineRule="exact"')
   })
 
+  it('keeps the percent gap under a paragraph of pictures alone', async () => {
+    // a 75pt picture on a 160% line: Hangul advances 75pt + the 6pt gap of a
+    // 10pt glyph; the picture line stays GenOffice's, the gap goes below it
+    const pic =
+      `<hp:pic><hp:sz width="7500" height="7500"/><hp:pos treatAsChar="1"/>` +
+      `<hc:img binaryItemIDRef="image1"/></hp:pic>`
+    const segs =
+      '<hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="7500" textheight="7500" baseline="6375" spacing="600" horzpos="0" horzsize="40000" flags="0"/></hp:linesegarray>'
+    const xml = section(
+      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${SEC_PR}${pic}</hp:run>${segs}</hp:p>`,
+    )
+    const doc = await documentXml(
+      (await convertHwpxToDocx(await hwpx(xml, { 'BinData/image1.bmp': tinyBmp() }))).docx,
+    )
+    expect(doc).toMatch(/<w:spacing w:after="120" w:line="\d+" w:lineRule="atLeast"\/>/)
+  })
+
   it("drops the space under a cell's last paragraph", async () => {
     const tc =
       `<hp:tc borderFillIDRef="1" hasMargin="0"><hp:subList vertAlign="CENTER">` +

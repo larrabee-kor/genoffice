@@ -329,6 +329,19 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
         paraFormat.lineRule = 'exact'
         paraFormat.lineRawTwips = saved
       }
+      // the percent's gap under it still belongs to the line (lawgo-21's card
+      // pictures: 183pt + 10.4pt), so it goes below as paragraph spacing
+      if (hasPicture && textless) {
+        const tallest = segments.reduce(
+          (max, segment) =>
+            segment.kind === 'picture' && !segment.floating
+              ? Math.max(max, segment.heightHwp ?? 0)
+              : max,
+          0,
+        )
+        const gap = savedLineAdvance(p) - hwpToTwips(tallest)
+        if (tallest > 0 && gap > 0) paraFormat.spaceAfter = (paraFormat.spaceAfter ?? 0) + gap
+      }
       delete paraFormat.lineSpacing
       // the gap under a cell's last line is not laid out (the row ends at the
       // glyphs), so its lines share the height Hangul recorded for them
