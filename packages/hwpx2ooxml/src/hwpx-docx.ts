@@ -86,7 +86,10 @@ const GEN_CTX = {
 }
 
 /** a paragraph is assembled from text runs and inline pictures in order */
-type Segment = { kind: 'run'; run: Run } | { kind: 'picture'; xml: string }
+type Segment =
+  | { kind: 'run'; run: Run }
+  /** overHwp: the picture's height when it is set over a cell too short for it */
+  | { kind: 'picture'; xml: string; overHwp?: number; floating?: boolean; heightHwp?: number }
 
 interface Ctx {
   header: HeaderTables
@@ -100,6 +103,15 @@ interface Ctx {
   /** nesting depth of tables being written (cells inside cells) */
   tableDepth: number
   headings: HeadingCounter
+  /** the cell whose paragraphs are being written: its content height and vertical alignment */
+  cell: {
+    contentHwp: number
+    marginsHwp: number
+    vAlign: CellInfo['vAlign']
+    overHwp: number
+  } | null
+  /** the table default vertical cell margins (hp:inMargin) of the table being written */
+  tableMarginHwp: { top: number; bottom: number }
   /** numbering the section's outline levels use (hp:secPr outlineShapeIDRef) */
   outlineId: string
 }
@@ -111,6 +123,8 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
   const ctx: Ctx = {
     header: readHeader(pack.header),
     headings: new HeadingCounter(readHeadings(pack.header)),
+    cell: null,
+    tableMarginHwp: { top: 0, bottom: 0 },
     outlineId: '1',
     pack,
     drops: new Drops(),
@@ -205,6 +219,10 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
       return
     }
     const paraFormat = emittedAny ? { ...format, pageBreakBefore: undefined } : { ...format }
+    const textless = segments.every((s) => s.kind === 'picture' || !s.run.text.trim())
+    // a lone picture taller than its cell floats over it (overCellPictureXml)
+    const over =
+      segments.length === 1 && segments[0].kind === 'picture' ? (segments[0].overHwp ?? 0) : 0
     if (shape.linePercent) {
       // Hangul's percent line spacing is a share of the font size itself, so
       // the line is the largest glyph × percent
@@ -216,14 +234,37 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
       // substituted face's taller line box (Malgun pitches at 1.73 em) from
       // growing the page; only lines holding pictures stay "at least", since an
       // exact line would clip them
-      const hasPicture = segments.some((segment) => segment.kind === 'picture')
+      // a placed (floating) picture does not sit on the line
+      const hasPicture =
+        !over && segments.some((segment) => segment.kind === 'picture' && !segment.floating)
       paraFormat.lineRule = hasPicture ? 'atLeast' : 'exact'
       paraFormat.lineRawTwips = Math.round(largest * 10 * (shape.linePercent / 100))
       delete paraFormat.lineSpacing
       // the gap under a cell's last line is not laid out (the row ends at the
       // glyphs), so its lines share the height Hangul recorded for them
-      const cellEnd = final && lastInCell && !hadTable && !hasPicture ? lastLinesHeight(p) : 0
+      const cellEnd =
+        final && lastInCell && !hadTable && !hasPicture && !over ? lastLinesHeight(p) : 0
       if (cellEnd > 0) paraFormat.lineRawTwips = cellEnd
+    }
+    if (over && segments[0].kind === 'picture') {
+      segments = [
+        {
+          kind: 'picture',
+          xml: overCellPictureXml(segments[0].xml, paraFormat, over, ctx.cell!.vAlign),
+        },
+      ]
+    } else if (ctx.cell && textless && segments.some((s) => s.kind === 'picture' && s.floating)) {
+      // a placed picture alone in a cell paragraph does not push the empty line
+      // down in Hangul: it sits in the cell by the cell's vertical alignment
+      const cell = ctx.cell
+      segments = segments.map((segment) =>
+        segment.kind === 'picture' && segment.floating && segment.heightHwp
+          ? {
+              ...segment,
+              xml: cellFloatingPictureXml(segment.xml, paraFormat, segment.heightHwp, cell.vAlign),
+            }
+          : segment,
+      )
     }
     out.push(paragraphXml(segments, paraFormat, markSize, shape.eastAsian))
     emittedAny = true
@@ -266,7 +307,24 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
         }
         case 'hp:pic': {
           const xml = await pictureRunXml(node, ctx)
-          if (xml) segments.push({ kind: 'picture', xml })
+          if (!xml) break
+          // Hangul keeps a cell at its own height when a picture set like a
+          // character is taller than the content area: the picture rides over
+          // the margins and rules (korea-156786997 slogan, 32pt in a 27pt cell)
+          const height = intAttr(firstChild(node, 'hp:sz'), 'height', 0)
+          const asChar = attr(firstChild(node, 'hp:pos'), 'treatAsChar') === '1'
+          const over = ctx.cell && asChar && height > ctx.cell.contentHwp ? height : 0
+          if (ctx.cell && (over || !asChar)) {
+            // the cell still grows to the picture plus its own vertical margins
+            // (korea-156786997: 3199 + 282 = the table's recorded 3481)
+            ctx.cell.overHwp = Math.max(ctx.cell.overHwp, height + ctx.cell.marginsHwp)
+          }
+          segments.push({
+            kind: 'picture',
+            xml,
+            ...(over ? { overHwp: over } : {}),
+            ...(asChar ? {} : { floating: true, heightHwp: height }),
+          })
           break
         }
         case 'hp:container':
@@ -635,6 +693,56 @@ const MIME: Record<string, NewImage['mime']> = {
   gif: 'image/gif',
 }
 
+/**
+ * A lone picture taller than its cell, as Hangul sets it: anchored to the
+ * paragraph without wrapping, centred across the cell (or at the paragraph
+ * alignment) and placed by the cell's vertical alignment against the
+ * paragraph's own line, so the row keeps its height and the picture overlaps
+ * the margins the way the original does. Behind the text layer, so the
+ * cell rules still draw over it as Hangul draws them.
+ */
+function overCellPictureXml(
+  runXml: string,
+  format: { align?: string; lineRawTwips?: number },
+  heightHwp: number,
+  vAlign: CellInfo['vAlign'],
+): string {
+  const lineTw = format.lineRawTwips ?? 0
+  const picTw = hwpToTwips(heightHwp)
+  const offsetTw =
+    vAlign === 'top' ? 0 : vAlign === 'bottom' ? lineTw - picTw : (lineTw - picTw) / 2
+  const align = format.align === 'right' ? 'right' : format.align === 'left' ? 'left' : 'center'
+  return runXml
+    .replace(
+      /<wp:inline distT="0" distB="0" distL="0" distR="0">/,
+      '<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="251659264"' +
+        ' behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/>' +
+        `<wp:positionH relativeFrom="column"><wp:align>${align}</wp:align></wp:positionH>` +
+        `<wp:positionV relativeFrom="paragraph"><wp:posOffset>${Math.round(offsetTw * 635)}</wp:posOffset></wp:positionV>`,
+    )
+    .replace(/(<wp:effectExtent [^>]*\/>)/, '$1<wp:wrapNone/>')
+    .replace('</wp:inline>', '</wp:anchor>')
+}
+
+/** a placed picture in a text-less cell paragraph: no wrap, vertical place by the cell alignment */
+function cellFloatingPictureXml(
+  runXml: string,
+  format: { lineRawTwips?: number },
+  heightHwp: number,
+  vAlign: CellInfo['vAlign'],
+): string {
+  const lineTw = format.lineRawTwips ?? 0
+  const picTw = hwpToTwips(heightHwp)
+  const offsetTw =
+    vAlign === 'top' ? 0 : vAlign === 'bottom' ? lineTw - picTw : (lineTw - picTw) / 2
+  return runXml
+    .replace(
+      /<wp:positionV relativeFrom="[^"]*">.*?<\/wp:positionV>/,
+      `<wp:positionV relativeFrom="paragraph"><wp:posOffset>${Math.round(offsetTw * 635)}</wp:posOffset></wp:positionV>`,
+    )
+    .replace(/<wp:wrap(?:TopAndBottom|Square)[^>]*\/>/, '<wp:wrapNone/>')
+}
+
 async function pictureRunXml(pic: XNode, ctx: Ctx): Promise<string | null> {
   const img = firstDescendant(pic, 'hc:img')
   const id = attr(img, 'binaryItemIDRef')
@@ -643,7 +751,6 @@ async function pictureRunXml(pic: XNode, ctx: Ctx): Promise<string | null> {
     return null
   }
   const pos = firstChild(pic, 'hp:pos')
-  if (pos && attr(pos, 'treatAsChar') !== '1') ctx.drops.add('floating-images-inlined')
 
   let resolved = ctx.pictureCache.get(id)
   if (resolved === undefined) {
@@ -666,7 +773,70 @@ async function pictureRunXml(pic: XNode, ctx: Ctx): Promise<string | null> {
     widthPx,
     heightPx,
   })
-  return `<w:r>${drawing}</w:r>`
+  const placed = pos && attr(pos, 'treatAsChar') !== '1'
+  return `<w:r>${placed ? floatingPictureXml(drawing, pic, pos) : drawing}</w:r>`
+}
+
+/** HWP positions are unsigned 32-bit HWPUNIT fields: wrapped values are negative */
+const signedHwp = (value: number): number => (value > 0x7fffffff ? value - 0x100000000 : value)
+const hwpToEmu = (hwp: number): number => Math.round(hwpToTwips(hwp) * 635)
+
+const H_RELATIVE: Record<string, string> = {
+  PAPER: 'page',
+  PAGE: 'margin',
+  COLUMN: 'column',
+  PARA: 'column',
+}
+const V_RELATIVE: Record<string, string> = { PAPER: 'page', PAGE: 'margin', PARA: 'paragraph' }
+const ALIGN_H: Record<string, string> = {
+  CENTER: 'center',
+  RIGHT: 'right',
+  INSIDE: 'inside',
+  OUTSIDE: 'outside',
+}
+const ALIGN_V: Record<string, string> = {
+  CENTER: 'center',
+  BOTTOM: 'bottom',
+  INSIDE: 'inside',
+  OUTSIDE: 'outside',
+}
+
+/**
+ * A picture Hangul places (treatAsChar="0") as a Word anchor: the same
+ * reference frame (paper, page, column, paragraph), alignment or offset,
+ * text wrap and outside margins, so it no longer takes a line of its own.
+ */
+function floatingPictureXml(inlineXml: string, pic: XNode, pos: XNode): string {
+  const horz = attr(pos, 'horzAlign') ?? 'LEFT'
+  const vert = attr(pos, 'vertAlign') ?? 'TOP'
+  const positionH = ALIGN_H[horz]
+    ? `<wp:align>${ALIGN_H[horz]}</wp:align>`
+    : `<wp:posOffset>${hwpToEmu(signedHwp(intAttr(pos, 'horzOffset', 0)))}</wp:posOffset>`
+  const positionV = ALIGN_V[vert]
+    ? `<wp:align>${ALIGN_V[vert]}</wp:align>`
+    : `<wp:posOffset>${hwpToEmu(signedHwp(intAttr(pos, 'vertOffset', 0)))}</wp:posOffset>`
+  const margin = firstChild(pic, 'hp:outMargin')
+  const dist = (side: string) => hwpToEmu(intAttr(margin, side, 0))
+  const wrapMode = attr(pic, 'textWrap') ?? 'TOP_AND_BOTTOM'
+  const behind = wrapMode === 'BEHIND_TEXT'
+  const wrap =
+    wrapMode === 'TOP_AND_BOTTOM'
+      ? '<wp:wrapTopAndBottom/>'
+      : wrapMode === 'BEHIND_TEXT' || wrapMode === 'IN_FRONT_OF_TEXT'
+        ? '<wp:wrapNone/>'
+        : '<wp:wrapSquare wrapText="bothSides"/>'
+  const z = 251659264 + Math.max(0, intAttr(pic, 'zOrder', 0))
+  return inlineXml
+    .replace(
+      /<wp:inline distT="0" distB="0" distL="0" distR="0">/,
+      `<wp:anchor distT="${dist('top')}" distB="${dist('bottom')}" distL="${dist('left')}" distR="${dist('right')}"` +
+        ` simplePos="0" relativeHeight="${z}" behindDoc="${behind ? 1 : 0}" locked="0" layoutInCell="1"` +
+        ` allowOverlap="${attr(pos, 'allowOverlap') === '1' ? 1 : 0}"><wp:simplePos x="0" y="0"/>` +
+        `<wp:positionH relativeFrom="${H_RELATIVE[attr(pos, 'horzRelTo') ?? 'COLUMN'] ?? 'column'}">${positionH}</wp:positionH>` +
+        `<wp:positionV relativeFrom="${V_RELATIVE[attr(pos, 'vertRelTo') ?? 'PARA'] ?? 'paragraph'}">${positionV}</wp:positionV>`,
+    )
+    .replace(/(<wp:effectExtent [^>]*\/>)/, `$1${wrap}`)
+    .replace('</wp:inline>', '</wp:anchor>')
 }
 
 async function resolvePicture(
@@ -706,6 +876,8 @@ interface CellInfo {
   border: BorderFill | null
   vAlign: 'top' | 'center' | 'bottom'
   margin: { left: number; right: number; top: number; bottom: number } | null
+  /** height of the tallest picture set over this cell (overCellPictureXml); 0 = none */
+  overHwp: number
   contentXml: string
 }
 
@@ -726,10 +898,16 @@ async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<strin
     const colCount = Math.max(1, intAttr(tbl, 'colCnt', 0))
     const cells: CellInfo[] = []
     let rowIndex = 0
+    const inMarginNode = firstChild(tbl, 'hp:inMargin')
+    const tableMarginHwp = {
+      top: intAttr(inMarginNode, 'top'),
+      bottom: intAttr(inMarginNode, 'bottom'),
+    }
     for (const { name, node: tr } of elements(tbl)) {
       if (name !== 'hp:tr') continue
       for (const { name: cellName, node: tc } of elements(tr)) {
         if (cellName !== 'hp:tc') continue
+        ctx.tableMarginHwp = tableMarginHwp
         cells.push(await cellInfo(tc, rowIndex, ctx))
       }
       rowIndex++
@@ -755,7 +933,12 @@ async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<strin
       const heights = cells
         .filter((cell) => cell.row === r && cell.rowSpan === 1 && cell.heightHwp > 0)
         .map((cell) => cell.heightHwp)
-      return heights.length > 0 ? Math.min(...heights) : 0
+      const declared = heights.length > 0 ? Math.min(...heights) : 0
+      // a picture set over a cell still stretches its row to the picture height
+      const over = cells
+        .filter((cell) => cell.row === r && cell.rowSpan === 1)
+        .reduce((max, cell) => Math.max(max, cell.overHwp), 0)
+      return Math.max(declared, over)
     })
 
     const inMargin = firstChild(tbl, 'hp:inMargin')
@@ -886,12 +1069,30 @@ async function cellInfo(tc: XNode, rowIndex: number, ctx: Ctx): Promise<CellInfo
   // a cell's own hp:cellMargin only applies with hasMargin="1"; otherwise the
   // table's hp:inMargin (written once as tblCellMar) is in force
   const marginNode = attr(tc, 'hasMargin') === '1' ? firstChild(tc, 'hp:cellMargin') : null
+  const vAlign = V_ALIGN[attr(subList, 'vertAlign') ?? ''] ?? 'top'
+  const marginsHwp = marginNode
+    ? intAttr(marginNode, 'top') + intAttr(marginNode, 'bottom')
+    : ctx.tableMarginHwp.top + ctx.tableMarginHwp.bottom
   const blocks: string[] = []
-  if (subList) {
-    const paragraphs = elements(subList).filter((child) => child.name === 'hp:p')
-    for (const [index, { node }] of paragraphs.entries()) {
-      blocks.push(...(await paragraphBlocks(node, ctx, index === paragraphs.length - 1)))
+  const outerCell = ctx.cell
+  const outerMargin = ctx.tableMarginHwp
+  const cell = {
+    contentHwp: intAttr(size, 'height', 0) - marginsHwp,
+    marginsHwp,
+    vAlign,
+    overHwp: 0,
+  }
+  ctx.cell = cell
+  try {
+    if (subList) {
+      const paragraphs = elements(subList).filter((child) => child.name === 'hp:p')
+      for (const [index, { node }] of paragraphs.entries()) {
+        blocks.push(...(await paragraphBlocks(node, ctx, index === paragraphs.length - 1)))
+      }
     }
+  } finally {
+    ctx.cell = outerCell
+    ctx.tableMarginHwp = outerMargin
   }
   // OOXML: a cell's last child must be a paragraph
   if (blocks.length === 0 || /^<w:tbl[\s>]/.test(blocks[blocks.length - 1])) blocks.push('<w:p/>')
@@ -903,7 +1104,8 @@ async function cellInfo(tc: XNode, rowIndex: number, ctx: Ctx): Promise<CellInfo
     widthHwp: intAttr(size, 'width', 0),
     heightHwp: intAttr(size, 'height', 0),
     border: ctx.header.borderFill(attr(tc, 'borderFillIDRef')),
-    vAlign: V_ALIGN[attr(subList, 'vertAlign') ?? ''] ?? 'top',
+    vAlign,
+    overHwp: cell.overHwp,
     margin: marginNode
       ? {
           left: hwpToTwips(intAttr(marginNode, 'left')),
