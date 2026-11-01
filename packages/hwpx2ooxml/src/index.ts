@@ -11,3 +11,10 @@ export { isHwpBinary, MAX_HWPX_PART_BYTES, type HwpxConvertErrorCode } from './p
 export { convertHwpToDocx, hwpToHwpx } from './hwp'
 export { bmpToPng } from './bmp'
 export { classifyFont, type FontClass, type FontHint } from './fonts'
+export {
+  convertHwpToTiptap,
+  docxToTiptap,
+  type HwpToTiptapResult,
+  type TiptapMark,
+  type TiptapNode,
+} from './tiptap'
