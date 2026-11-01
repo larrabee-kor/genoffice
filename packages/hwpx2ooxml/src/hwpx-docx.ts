@@ -33,6 +33,8 @@ import {
 } from '../../docx-engine/src/index'
 import { bmpToPng } from './bmp'
 import { withFontTable } from './fonts'
+import { condensedSpaces, plainParagraph, type PlainChar } from './condense'
+import { withHeaderFooter, type HeaderFooterParts } from './headerfooter'
 import { HeadingCounter, readHeadings } from './numbering'
 import { withHangulLayoutSettings } from './settings'
 import {
@@ -48,6 +50,7 @@ import {
   attr,
   children,
   elements,
+  escapeXml,
   firstChild,
   firstDescendant,
   intAttr,
@@ -110,6 +113,11 @@ interface Ctx {
     vAlign: CellInfo['vAlign']
     overHwp: number
   } | null
+  /** headers, footers and the page number collected from the controls */
+  hf: HeaderFooterParts
+  /** the page a top-level paragraph is on (its first line's vertpos restarts per page) */
+  page: number
+  lastVertpos: number
   /** the table default vertical cell margins (hp:inMargin) of the table being written */
   tableMarginHwp: { top: number; bottom: number }
   /** numbering the section's outline levels use (hp:secPr outlineShapeIDRef) */
@@ -125,6 +133,17 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
     headings: new HeadingCounter(readHeadings(pack.header)),
     cell: null,
     tableMarginHwp: { top: 0, bottom: 0 },
+    hf: {
+      header: null,
+      footer: null,
+      pageNumber: null,
+      hideFirstPageNumber: false,
+      pageStart: null,
+      headerDistTw: null,
+      footerDistTw: null,
+    },
+    page: 0,
+    lastVertpos: -1,
     outlineId: '1',
     pack,
     drops: new Drops(),
@@ -147,7 +166,9 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
     }
     const before = body.length
     for (const { name, node } of elements(sec)) {
-      if (name === 'hp:p') body.push(...(await paragraphBlocks(node, ctx)))
+      if (name !== 'hp:p') continue
+      notePage(node, ctx, index)
+      body.push(...(await paragraphBlocks(node, ctx)))
     }
     // a later section starts on its own page in nearly every real document
     // (Hangul's section break); without per-section sectPr this keeps the flow
@@ -172,7 +193,8 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
     ...(Object.keys(ctx.pictures).length > 0 ? { newPictures: ctx.pictures } : {}),
   })
   // original font names stay on the runs; the table tells Word/GenOffice how to substitute
-  const docx = await withHangulLayoutSettings(await withFontTable(saved))
+  const withParts = await withHeaderFooter(saved, ctx.hf, pageNumberRunPr(ctx))
+  const docx = await withHangulLayoutSettings(await withFontTable(withParts))
   return { docx, blocks: blocks.length, dropped: ctx.drops.list() }
 }
 
@@ -210,7 +232,39 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
   let hadTable = false
   const trailing: string[] = []
 
+  // Hangul's condense rule needs the saved line layout matched char by char
+  let fitChars: PlainChar[] | null = shape.condense && plainParagraph(p) ? [] : null
+  const flushFitted = (): void => {
+    if (!fitChars) return
+    const squeeze = condensedSpaces(p, fitChars, shape.condense ?? 0, format)
+    let i = 0
+    while (i < fitChars.length) {
+      const { char } = fitChars[i]
+      const extra = squeeze.get(i)
+      if (extra !== undefined) {
+        const run = runOf(fitChars[i].ch, char)
+        run.charSpacingTwips = Math.round((run.charSpacingTwips ?? 0) + extra * 20)
+        segments.push({ kind: 'run', run })
+        i++
+        continue
+      }
+      let j = i
+      while (j < fitChars.length && fitChars[j].char === char && !squeeze.has(j)) j++
+      appendText(
+        segments,
+        fitChars
+          .slice(i, j)
+          .map((c) => c.ch)
+          .join(''),
+        char,
+      )
+      i = j
+    }
+    fitChars = null
+  }
+
   const flush = (force: boolean, final = false): void => {
+    if (final) flushFitted()
     const hasContent = segments.some(
       (segment) => segment.kind === 'picture' || segment.run.text.length > 0,
     )
@@ -282,15 +336,22 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
           // Hangul leaves half the glyph size between the head and the text (textOffset 50%)
           if (head && text) appendText(segments, `${head}\u2002`, char)
           if (text) head = undefined
-          appendText(segments, text, char)
+          // a condensed paragraph's text waits for its line fitting (flush)
+          if (fitChars) for (const ch of text) fitChars.push({ ch, char })
+          else appendText(segments, text, char)
           break
         }
         case 'hp:secPr':
-          if (!ctx.section) ctx.section = sectionSettings(node)
+          if (!ctx.section) {
+            ctx.section = sectionSettings(node)
+            const margin = firstChild(firstChild(node, 'hp:pagePr'), 'hp:margin')
+            ctx.hf.headerDistTw = hwpToTwips(intAttr(margin, 'top', 0))
+            ctx.hf.footerDistTw = hwpToTwips(intAttr(margin, 'bottom', 0))
+          }
           ctx.outlineId = attr(node, 'outlineShapeIDRef') ?? ctx.outlineId
           break
         case 'hp:ctrl':
-          dropControls(node, ctx)
+          await controls(node, ctx)
           break
         case 'hp:tbl': {
           flush(false)
@@ -602,23 +663,53 @@ function withPageBreakBefore(xml: string): string {
   return xml.replace(/^<w:p\b[^>]*>/, (open) => `${open}<w:pPr><w:pageBreakBefore/></w:pPr>`)
 }
 
-function dropControls(ctrl: XNode, ctx: Ctx): void {
-  for (const { name } of elements(ctrl)) {
+/** a new page starts where a top-level paragraph's first line goes back up the page */
+function notePage(p: XNode, ctx: Ctx, sectionIndex: number): void {
+  const array = firstChild(p, 'hp:linesegarray')
+  const first = array ? elements(array).find((seg) => seg.name === 'hp:lineseg') : undefined
+  if (!first) return
+  const vertpos = intAttr(first.node, 'vertpos', 0)
+  if (sectionIndex > 0 || attr(p, 'pageBreak') === '1' || vertpos < ctx.lastVertpos) ctx.page++
+  ctx.lastVertpos = vertpos
+}
+
+async function controls(ctrl: XNode, ctx: Ctx): Promise<void> {
+  for (const { name, node } of elements(ctrl)) {
     switch (name) {
       case 'hp:header':
-        ctx.drops.add('headers')
+      case 'hp:footer': {
+        const key = name === 'hp:header' ? 'header' : 'footer'
+        // odd/even variants: the first BOTH (or any) definition stands
+        if (ctx.hf[key] && attr(node, 'applyPageType') !== 'BOTH') break
+        const cell = ctx.cell
+        ctx.cell = null
+        try {
+          ctx.hf[key] = await subListBlocks(node, ctx)
+        } finally {
+          ctx.cell = cell
+        }
         break
-      case 'hp:footer':
-        ctx.drops.add('footers')
+      }
+      case 'hp:pageNum':
+        ctx.hf.pageNumber ??= {
+          pos: attr(node, 'pos') ?? 'BOTTOM_CENTER',
+          formatType: attr(node, 'formatType') ?? 'DIGIT',
+          sideChar: attr(node, 'sideChar') ?? '',
+        }
+        break
+      case 'hp:pageHiding':
+        if (attr(node, 'hidePageNum') === '1' && ctx.page === 0) ctx.hf.hideFirstPageNumber = true
+        break
+      case 'hp:newNum':
+        if (attr(node, 'numType') === 'PAGE' && ctx.page === 0) {
+          ctx.hf.pageStart = intAttr(node, 'num', 1)
+        }
         break
       case 'hp:footNote':
         ctx.drops.add('footnotes')
         break
       case 'hp:endNote':
         ctx.drops.add('endnotes')
-        break
-      case 'hp:pageNum':
-        ctx.drops.add('page-numbers')
         break
       default:
         break // column settings, fields, bookmarks: layout/meta only
@@ -1019,6 +1110,17 @@ function tablePlacementXml(tbl: XNode, hostAlign?: string): string {
   const offset = hwpToTwips(intAttr(pos, 'horzOffset', 0))
   // horzOffset is an unsigned 32-bit field: wrapped values are negative offsets
   return offset > 0 && offset < 20000 ? `<w:tblInd w:w="${offset}" w:type="dxa"/>` : ''
+}
+
+/** the page number's run properties: the document's base character shape (id 0) */
+function pageNumberRunPr(ctx: Ctx): string {
+  const char = ctx.header.charShape('0')
+  const face = char.fontHangul ?? char.fontLatin
+  const size = char.sizeHalfPoints ?? 20
+  const fonts = face
+    ? `<w:rFonts w:ascii="${escapeXml(char.fontLatin ?? face)}" w:eastAsia="${escapeXml(face)}" w:hAnsi="${escapeXml(char.fontLatin ?? face)}"/>`
+    : ''
+  return `<w:rPr>${fonts}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr>`
 }
 
 /** usable page height (A4 with Hangul's default margins until a secPr is read) */

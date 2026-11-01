@@ -6,6 +6,7 @@
  * the docx filter learns, a Tiptap editor gets with it, and both stay
  * comparable on the same document.
  *
+ * Letter spacing rides on textStyle as `letterSpacing` (a host declares it).
  * Images are emitted inside paragraphs, so the Image extension needs
  * `inline: true`. Attributes a stock extension does not declare are dropped
  * by the editor schema, never misread.
@@ -197,23 +198,44 @@ function inlineNodes(runs: Run[]): TiptapNode[] {
       out.push(imageNode(run.image.dataUrl, run.image.widthPx, run.image.heightPx))
     }
     if (!run.text) continue
-    const marks = runMarks(run)
-    run.text.split('\n').forEach((piece, index) => {
+    run.text.split('\n').forEach((line, index) => {
       if (index > 0) out.push({ type: 'hardBreak' })
-      if (!piece) return
-      // runs the docx splits for Word-only reasons (a space's Latin face) fold back together
-      const last = out[out.length - 1]
-      if (last?.type === 'text' && JSON.stringify(last.marks ?? []) === JSON.stringify(marks)) {
-        last.text += piece
-      } else {
-        out.push({ type: 'text', text: piece, ...(marks.length > 0 ? { marks } : {}) })
+      for (const piece of spacingPieces(line, run)) {
+        const marks = runMarks(run, piece.half)
+        // runs the docx splits for Word-only reasons fold back together
+        const last = out[out.length - 1]
+        if (last?.type === 'text' && JSON.stringify(last.marks ?? []) === JSON.stringify(marks)) {
+          last.text += piece.text
+        } else {
+          out.push({ type: 'text', text: piece.text, ...(marks.length > 0 ? { marks } : {}) })
+        }
       }
     })
   }
   return out
 }
 
-function runMarks(run: Run): TiptapMark[] {
+const FULL_WIDTH = /[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uff60]/
+
+/**
+ * Hangul's letter spacing is a percent of each glyph's own advance; CSS adds
+ * one length per glyph. Full-width glyphs take the whole value, half-width
+ * ones (Latin, digits, spaces, hyphens) half of it.
+ */
+function spacingPieces(text: string, run: Run): Array<{ text: string; half: boolean }> {
+  if (!text) return []
+  if (!hwpFaces || !run.charSpacingTwips) return [{ text, half: false }]
+  const out: Array<{ text: string; half: boolean }> = []
+  for (const ch of text) {
+    const half = !FULL_WIDTH.test(ch)
+    const last = out[out.length - 1]
+    if (last && last.half === half) last.text += ch
+    else out.push({ text: ch, half })
+  }
+  return out
+}
+
+function runMarks(run: Run, halfWidth = false): TiptapMark[] {
   const marks: TiptapMark[] = []
   if (run.bold) marks.push({ type: 'bold' })
   if (run.italic) marks.push({ type: 'italic' })
@@ -227,6 +249,13 @@ function runMarks(run: Run): TiptapMark[] {
   const font = run.eastAsiaFont ?? run.font
   if (font) style.fontFamily = fontFamilyCss(font)
   if (run.sizeHalfPoints) style.fontSize = `${run.sizeHalfPoints / 2}pt`
+  if (run.charSpacingTwips) {
+    // the docx carries half of Hangul's percent for Word's doubled double-byte
+    // spacing (hwpx-docx runOf): whole again on full-width glyphs, as it is on
+    // half-width ones (spacingPieces)
+    const twips = hwpFaces && !halfWidth ? run.charSpacingTwips * 2 : run.charSpacingTwips
+    style.letterSpacing = `${Math.round(twips * 5) / 100}pt`
+  }
   if (Object.keys(style).length > 0) marks.push({ type: 'textStyle', attrs: style })
   const highlight = run.shading ?? run.highlight
   if (highlight && /^[0-9a-f]{6}$/i.test(highlight)) {
@@ -270,7 +299,14 @@ function tableNode(table: TableModel): TiptapNode {
     }
     return { type: 'tableRow', content: cells.length > 0 ? cells : [emptyCell()] }
   })
-  return { type: 'table', content: rows }
+  // a table set off the left edge (w:jc right / center) keeps its place
+  const style =
+    table.align === 'right'
+      ? 'margin-left:auto;margin-right:0'
+      : table.align === 'center'
+        ? 'margin-left:auto;margin-right:auto'
+        : ''
+  return { type: 'table', ...(style ? { attrs: { style } } : {}), content: rows }
 }
 
 function cellNode(cell: TableCell, col: number, rowspan: number, colPx: number[]): TiptapNode {
@@ -286,10 +322,18 @@ function cellNode(cell: TableCell, col: number, rowspan: number, colPx: number[]
       ...(cell.fill && /^[0-9a-f]{6}$/i.test(cell.fill)
         ? { backgroundColor: `#${cell.fill}` }
         : {}),
-      ...(cell.borders ? { style: borderCss(cell.borders) } : {}),
+      ...(cellCss(cell) ? { style: cellCss(cell) } : {}),
     },
     content: content.length > 0 ? content : [{ type: 'paragraph' }],
   }
+}
+
+/** cell borders and vertical alignment as inline CSS */
+function cellCss(cell: TableCell): string {
+  const css = cell.borders ? [borderCss(cell.borders)] : []
+  if (cell.vAlign === 'center') css.push('vertical-align:middle')
+  else if (cell.vAlign === 'bottom') css.push('vertical-align:bottom')
+  return css.join(';')
 }
 
 const CSS_BORDER: Record<string, string> = {

@@ -62,6 +62,8 @@ export interface ParaShape {
   eastAsian?: { autoSpaceDE: boolean; autoSpaceDN: boolean; wordWrap: boolean }
   /** hh:lineSpacing PERCENT value: line height = font size × percent (Hangul's rule) */
   linePercent?: number
+  /** hh:paraPr condense: the share (%) by which Hangul may shrink a line's spaces to fit it */
+  condense?: number
   numbering?: 'outline' | 'number' | 'bullet'
   level?: number
   /** hh:heading idRef: the bullet or numbering the head comes from */
@@ -264,7 +266,11 @@ export function readHeader(root: XNode[]): HeaderTables {
     // from its name: Hangul's saved line layouts break KEEP_WORD paragraphs
     // between syllables (573 of 1191 corpus breaks fell mid-word) and
     // BREAK_WORD ones at spaces (1 of 107), so only BREAK_WORD keeps Word's
-    // whole-word wrapping and KEEP_WORD (the default) turns w:wordWrap off
+    // whole-word wrapping and KEEP_WORD (the default) turns w:wordWrap off.
+    // That holds for every writer: the PDFs Hangul 2018 and 2022 export keep
+    // most words whole but still split them at particles and endings
+    // (강화|하는, 마련하겠|습니다), which whole-word wrapping misses by more
+    // (corpus: 2,530 vs 2,605 of 2,710 line ends matched)
     const auto = find('hh:autoSpacing')
     shape.eastAsian = {
       autoSpaceDE: attr(auto, 'eAsianEng') === '1',
@@ -275,6 +281,8 @@ export function readHeader(root: XNode[]): HeaderTables {
       const percent = intAttr(line, 'value', 160)
       if (percent > 0) shape.linePercent = percent
     }
+    const condense = Number(attr(node, 'condense') ?? 0)
+    if (condense > 0) shape.condense = Math.min(75, condense)
     const heading = find('hh:heading')
     const headingType = attr(heading, 'type')
     if (headingType === 'OUTLINE') shape.numbering = 'outline'

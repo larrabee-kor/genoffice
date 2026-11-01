@@ -318,12 +318,43 @@ describe('convertHwpxToDocx', () => {
 
   it('counts what it drops instead of guessing', async () => {
     const xml = section(
-      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${SEC_PR}<hp:ctrl><hp:header/><hp:pageNum/></hp:ctrl>` +
+      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${SEC_PR}<hp:ctrl><hp:footNote/></hp:ctrl>` +
         `<hp:equation><hp:script>x^2</hp:script></hp:equation><hp:t>본문</hp:t></hp:run></hp:p>`,
     )
     const result = await convertHwpxToDocx(await hwpx(xml))
     const dropped = Object.fromEntries(result.dropped.map((d) => [d.what, d.count]))
-    expect(dropped).toMatchObject({ headers: 1, 'page-numbers': 1, equations: 1 })
+    expect(dropped).toMatchObject({ footnotes: 1, equations: 1 })
+  })
+
+  it('writes footers and the page number, hidden on a cover page', async () => {
+    const footer =
+      '<hp:ctrl><hp:footer applyPageType="BOTH"><hp:subList><hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">' +
+      '<hp:t>용지 규격</hp:t></hp:run></hp:p></hp:subList></hp:footer></hp:ctrl>'
+    const xml = section(
+      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${SEC_PR}${footer}` +
+        '<hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/></hp:ctrl>' +
+        '<hp:ctrl><hp:pageHiding hidePageNum="1"/></hp:ctrl><hp:t>표지</hp:t></hp:run></hp:p>',
+    )
+    const docx = (await convertHwpxToDocx(await hwpx(xml))).docx
+    const zip = await JSZip.loadAsync(docx)
+    const main = await zip.file('word/footer1.xml')!.async('string')
+    expect(main).toContain('용지 규격')
+    expect(main).toMatch(
+      /<w:t xml:space="preserve">- <\/w:t>.*PAGE .*<w:t xml:space="preserve"> -<\/w:t>/,
+    )
+    // the cover keeps the footer text but not the number
+    const first = await zip.file('word/footer2.xml')!.async('string')
+    expect(first).toContain('용지 규격')
+    expect(first).not.toContain('PAGE')
+    const doc = await documentXml(docx)
+    expect(doc).toMatch(
+      /<w:sectPr><w:footerReference w:type="default"[^>]*\/><w:footerReference w:type="first"/,
+    )
+    expect(doc).toContain('<w:titlePg/>')
+    // the bands start at Hangul's bottom margin (4252 HWPUNIT = 850 twips)
+    expect(doc).toMatch(/w:footer="850"/)
+    const parsed = await parseDocx(docx)
+    expect(parsed.blocks.length).toBeGreaterThan(0)
   })
 })
 

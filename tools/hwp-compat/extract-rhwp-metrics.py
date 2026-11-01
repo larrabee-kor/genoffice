@@ -62,7 +62,14 @@ FACES = {
     "궁서체": "mono",
     "새굴림": "sans",
     "맑은 고딕": "sans",
+    # Hancom's Latin face, laid out with the face rhwp's registry names for it
+    # (style-fallback): its widths feed line fitting, its glyphs come from
+    # that installed face (build-hwp-compat-fonts.py LATIN_ALIASES)
+    "HCI Poppy": "latin",
 }
+
+# Latin faces rhwp lays out with another face's table (registry style-fallback)
+LATIN_LAYOUT = {"HCI Poppy": "Palatino Linotype"}
 
 ARRAY_RE = re.compile(r"static (\w+): \[(u16|u8); \d+\] = \[([^\]]*)\];", re.S)
 RANGES_RE = re.compile(r"static (\w+): \[LatinRange; \d+\] = \[(.*?)\];", re.S)
@@ -160,7 +167,7 @@ def main() -> None:
 
     faces = {}
     for face, cls in FACES.items():
-        target = face if find(face, False) else alias.get(face)
+        target = face if find(face, False) else (alias.get(face) or LATIN_LAYOUT.get(face))
         regular = find(target, False) if target else None
         if not regular:
             print(f"skip {face}: no rhwp metric", file=sys.stderr)
