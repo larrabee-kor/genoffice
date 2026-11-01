@@ -61,11 +61,18 @@ describe('convertHwpToTiptap', () => {
         { type: 'bold' },
         {
           type: 'textStyle',
-          attrs: { color: '#0000FF', fontFamily: '휴먼명조', fontSize: '16pt' },
+          attrs: {
+            color: '#0000FF',
+            // the compat face carries Hangul's widths for hosts that load hwp-compat.css
+            fontFamily: "'휴먼명조', 'HWP Compat HumanMyeongjo', serif",
+            fontSize: '16pt',
+          },
         },
       ],
     })
-    expect(body.attrs).toEqual({ textAlign: 'justify' })
+    expect(body.attrs).toMatchObject({ textAlign: 'justify' })
+    // the first section's sheet (A4) for hosts that lay out pages
+    expect(result.page).toMatchObject({ widthPt: 595.3, heightPt: 841.9 })
     expect(body.content!.map((n) => n.type)).toEqual(['text', 'hardBreak', 'text'])
     // vertical merge: rowspan on the origin, no cell in the covered slot
     expect(tbl.type).toBe('table')

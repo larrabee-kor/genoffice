@@ -48,7 +48,7 @@ function scrapeFlags(
     breakOnly: f.breakOnly,
   }
 }
-import { additiveParagraphSpacing, autoLineMultOf } from './line-metrics'
+import { additiveParagraphSpacing, autoLineMultOf, hwpLayoutOn } from './line-metrics'
 import { appliedFloatShift } from './editor/layout-health'
 
 /**
@@ -78,7 +78,7 @@ export function lineLeadPx(el: HTMLElement): number {
     : null
   if (inner) el = inner
   const mult = autoLineMultOf(el)
-  if (mult <= 1) return 0
+  if (mult <= 1) return hwpLayoutOn() ? hangulLineLeadPx(el) : 0
   const cs = getComputedStyle(el)
   // typed line grids centre the multiple's extra in the snapped cell (unprobed at
   // the page bottom): keep charging the full box there
@@ -91,6 +91,21 @@ export function lineLeadPx(el: HTMLElement): number {
   const lh = parseFloat(cs.lineHeight)
   if (!Number.isFinite(lh) || lh <= 0) return 0
   return lh * (1 - 1 / mult)
+}
+
+/**
+ * Hangul keeps a line on the page when its glyph height fits: the gap a fixed
+ * or percent line adds under the glyphs may run into the bottom margin
+ * (lineseg vertsize vs spacing; korea-156786997 p1 ends on a 14pt line whose
+ * 21.7pt box crosses the margin). An HWP-origin paragraph's exact line
+ * (hwpx2ooxml writes percent spacing as exact) charges only its font size.
+ */
+function hangulLineLeadPx(el: HTMLElement): number {
+  const cs = getComputedStyle(el)
+  const lh = parseFloat(cs.lineHeight)
+  const fs = parseFloat(cs.fontSize)
+  if (!Number.isFinite(lh) || !Number.isFinite(fs) || lh <= fs) return 0
+  return lh - fs
 }
 
 const ZERO_SLOT_PX = 0.05

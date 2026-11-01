@@ -64,6 +64,8 @@ export interface ParaShape {
   linePercent?: number
   numbering?: 'outline' | 'number' | 'bullet'
   level?: number
+  /** hh:heading idRef: the bullet or numbering the head comes from */
+  headingIdRef?: string
 }
 
 export interface HeaderTables {
@@ -278,7 +280,10 @@ export function readHeader(root: XNode[]): HeaderTables {
     if (headingType === 'OUTLINE') shape.numbering = 'outline'
     else if (headingType === 'NUMBER') shape.numbering = 'number'
     else if (headingType === 'BULLET') shape.numbering = 'bullet'
-    if (shape.numbering) shape.level = intAttr(heading, 'level', 0)
+    if (shape.numbering) {
+      shape.level = intAttr(heading, 'level', 0)
+      shape.headingIdRef = attr(heading, 'idRef')
+    }
     paras.set(id, shape)
   }
 

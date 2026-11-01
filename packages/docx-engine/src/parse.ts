@@ -6654,6 +6654,7 @@ async function parseLayoutSettings(zip: JSZip): Promise<{
   indentNotNumberingTabStop?: boolean
   doNotExpandShiftReturn?: boolean
   doNotUseHTMLParagraphAutoSpacing?: boolean
+  hwpSource?: boolean
 }> {
   const file = zip.file('word/settings.xml')
   if (!file) return {}
@@ -6674,8 +6675,13 @@ async function parseLayoutSettings(zip: JSZip): Promise<{
     ...(xmlFlagOn(xml, 'w:doNotUseHTMLParagraphAutoSpacing')
       ? { doNotUseHTMLParagraphAutoSpacing: true }
       : {}),
+    ...(HWP_SOURCE_RE.test(xml) ? { hwpSource: true } : {}),
   }
 }
+
+/** the document variable @genoffice/hwpx2ooxml writes into documents it converts from HWP/HWPX */
+const HWP_SOURCE_RE =
+  /<w:docVar\b(?=[^>]*\sw:name="GenOfficeSourceFormat")(?=[^>]*\sw:val="hwp")[^>]*\/?>/
 
 /** effective document-wide footnotePr / endnotePr: settings.xml overlaid by the final body sectPr */
 async function parseNoteProps(

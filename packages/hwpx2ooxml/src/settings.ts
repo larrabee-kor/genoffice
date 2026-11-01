@@ -5,7 +5,8 @@
  * keeps the face's own 0.25-0.36 em space). That is Hangul's own rule: the
  * original PDFs measure 0.5 em per space in Korean faces, and the narrower
  * spaces pulled one or two extra syllables onto every body line.
- * No compatibilityMode is declared, as before the part existed.
+ * No compatibilityMode is declared, as before the part existed. CT_Settings
+ * puts w:docVars right after w:compat.
  */
 
 import JSZip from 'jszip'
@@ -17,6 +18,15 @@ const SETTINGS_CT = 'application/vnd.openxmlformats-officedocument.wordprocessin
 /** CT_Compat order: balanceSingleByteDoubleByteWidth precedes useFELayout */
 const COMPAT = '<w:compat><w:balanceSingleByteDoubleByteWidth/><w:useFELayout/></w:compat>'
 
+/**
+ * Marks the document as converted from HWP/HWPX (a document variable, kept by
+ * Word and GenOffice on save): GenOffice then draws the Hancom faces with
+ * their compat faces (apps/docs/src/renderer/fonts/hwp-compat.css) instead of
+ * Word's substitutes. The value names the source format family.
+ */
+export const HWP_SOURCE_DOC_VAR = 'GenOfficeSourceFormat'
+const DOC_VARS = `<w:docVars><w:docVar w:name="${HWP_SOURCE_DOC_VAR}" w:val="hwp"/></w:docVars>`
+
 export async function withHangulLayoutSettings(docx: Uint8Array): Promise<Uint8Array> {
   const zip = await JSZip.loadAsync(docx)
   if (zip.file('word/settings.xml')) return docx
@@ -24,7 +34,7 @@ export async function withHangulLayoutSettings(docx: Uint8Array): Promise<Uint8A
     zip,
     'settings.xml',
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      `<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${COMPAT}</w:settings>`,
+      `<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${COMPAT}${DOC_VARS}</w:settings>`,
     SETTINGS_REL,
     SETTINGS_CT,
   )

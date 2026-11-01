@@ -21,6 +21,7 @@ import {
   buildBlankDocx,
   generateParagraphXml,
   inlinePictureDrawingXml,
+  keepsHangulKanaSingle,
   NEW_PICTURE_TOKEN_PREFIX,
   parseDocx,
   saveDocx,
@@ -32,6 +33,7 @@ import {
 } from '../../docx-engine/src/index'
 import { bmpToPng } from './bmp'
 import { withFontTable } from './fonts'
+import { HeadingCounter, readHeadings } from './numbering'
 import { withHangulLayoutSettings } from './settings'
 import {
   readHeader,
@@ -97,6 +99,9 @@ interface Ctx {
   section: SectionSettings | null
   /** nesting depth of tables being written (cells inside cells) */
   tableDepth: number
+  headings: HeadingCounter
+  /** numbering the section's outline levels use (hp:secPr outlineShapeIDRef) */
+  outlineId: string
 }
 
 const MAX_TABLE_DEPTH = 8
@@ -105,6 +110,8 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
   const pack = await loadHwpxPackage(hwpx)
   const ctx: Ctx = {
     header: readHeader(pack.header),
+    headings: new HeadingCounter(readHeadings(pack.header)),
+    outlineId: '1',
     pack,
     drops: new Drops(),
     pictures: {},
@@ -172,7 +179,16 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
   const shape = ctx.header.paraShape(attr(p, 'paraPrIDRef'))
   const format = { ...shape.format }
   if (attr(p, 'pageBreak') === '1') format.pageBreakBefore = true
-  if (shape.numbering) ctx.drops.add('auto-numbering')
+  // the paragraph head (bullet / number) goes in front of the first text
+  let head = shape.numbering
+    ? ctx.headings.next(
+        shape.numbering,
+        shape.numbering === 'outline' ? ctx.outlineId : shape.headingIdRef,
+        shape.level ?? 0,
+      )
+    : undefined
+  if (head) ctx.drops.add('auto-numbering-static')
+  else if (shape.numbering) ctx.drops.add('auto-numbering')
 
   let segments: Segment[] = []
   let markSize: number | undefined
@@ -220,11 +236,17 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
     if (char.sizeHalfPoints) markSize = char.sizeHalfPoints
     for (const { name, node } of elements(run.node)) {
       switch (name) {
-        case 'hp:t':
-          appendText(segments, textOfT(node, ctx), char)
+        case 'hp:t': {
+          const text = textOfT(node, ctx)
+          // Hangul leaves half the glyph size between the head and the text (textOffset 50%)
+          if (head && text) appendText(segments, `${head}\u2002`, char)
+          if (text) head = undefined
+          appendText(segments, text, char)
           break
+        }
         case 'hp:secPr':
           if (!ctx.section) ctx.section = sectionSettings(node)
+          ctx.outlineId = attr(node, 'outlineShapeIDRef') ?? ctx.outlineId
           break
         case 'hp:ctrl':
           dropControls(node, ctx)
@@ -236,7 +258,7 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
           const captionBlocks = caption ? await subListBlocks(caption, ctx) : []
           const below = attr(caption, 'side') !== 'TOP'
           if (!below) out.push(...captionBlocks)
-          out.push(await tableXml(node, ctx))
+          out.push(await tableXml(node, ctx, format.align))
           if (below) out.push(...captionBlocks)
           hadTable = true
           emittedAny = true
@@ -309,14 +331,48 @@ async function subListBlocks(owner: XNode, ctx: Ctx): Promise<string[]> {
 
 function appendText(segments: Segment[], text: string, char: CharShape): void {
   if (!text) return
-  const last = segments[segments.length - 1]
-  const run = runOf(text, char)
-  // merge with the previous run when the formatting matches (fewer w:r)
-  if (last && last.kind === 'run' && sameFormat(last.run, run)) {
-    last.run.text += text
-    return
+  for (const piece of textPieces(text, char)) {
+    const run = runOf(piece.text, char, piece.kind)
+    const last = segments[segments.length - 1]
+    // merge with the previous run when the formatting matches (fewer w:r)
+    if (last && last.kind === 'run' && sameFormat(last.run, run)) last.run.text += piece.text
+    else segments.push({ kind: 'run', run })
   }
-  segments.push({ kind: 'run', run })
+}
+
+type PieceKind = 'wide' | 'other'
+
+/**
+ * Text split where Word applies letter spacing differently from the rest of
+ * the run: under the balanced-width setting (settings.ts) Word doubles
+ * w:spacing on double-byte glyphs except hangul in a few faces (runOf).
+ * Glyph widths themselves are the compat faces' business (tools/hwp-compat),
+ * not the converter's.
+ */
+function textPieces(text: string, char: CharShape): Array<{ text: string; kind: PieceKind }> {
+  // only a face Word keeps single gives double-byte stretches a different value
+  const single = keepsHangulKanaSingle(char.fontHangul ?? char.fontLatin)
+  if (!char.spacingPct || !char.sizeHalfPoints || !single) return [{ text, kind: 'other' }]
+  const pieces: Array<{ text: string; kind: PieceKind }> = []
+  for (const ch of text) {
+    const kind: PieceKind = isDoubleByte(ch.codePointAt(0)!) ? 'wide' : 'other'
+    const last = pieces[pieces.length - 1]
+    if (last?.kind === kind) last.text += ch
+    else pieces.push({ text: ch, kind })
+  }
+  return pieces
+}
+
+/** what Word counts as double-byte for balanced spacing (docx-engine doubledGlyphFraction) */
+function isDoubleByte(cp: number): boolean {
+  return (
+    (cp >= 0x1100 && cp <= 0x11ff) ||
+    (cp >= 0x2e80 && cp <= 0x9fff) ||
+    (cp >= 0xac00 && cp <= 0xd7af) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    cp >= 0x20000
+  )
 }
 
 function sameFormat(a: Run, b: Run): boolean {
@@ -325,11 +381,10 @@ function sameFormat(a: Run, b: Run): boolean {
   return JSON.stringify(restA) === JSON.stringify(restB)
 }
 
-/** characters Word counts as double-byte for balanced spacing: CJK, Hangul, fullwidth forms */
-const DOUBLE_BYTE =
-  /[\u1100-\u11ff\u2e80-\ua4cf\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]/
+const isHangulText = (text: string): boolean =>
+  /^[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]+$/.test(text)
 
-function runOf(text: string, char: CharShape): Run {
+function runOf(text: string, char: CharShape, kind: PieceKind = 'other'): Run {
   const run: Run = { text }
   if (char.bold) run.bold = true
   if (char.italic) run.italic = true
@@ -348,11 +403,16 @@ function runOf(text: string, char: CharShape): Run {
   if (latin) run.fontAscii = latin
   if (char.scalePct) run.charScalePct = Math.min(600, Math.max(1, char.scalePct))
   if (char.spacingPct && char.sizeHalfPoints) {
-    // Hangul letter spacing is a percent of the glyph size; OOXML wants twips.
-    // Under the balanced-width setting (settings.ts) Word applies w:spacing
-    // twice to double-byte characters, so runs holding any are written at half
+    // Hangul letter spacing is a percent of each glyph's own advance (rhwp
+    // text_measurement: 휴먼명조 '*' 0.5 em at -9% spaces 0.455 em), OOXML's a
+    // fixed twip amount per glyph. Full-width glyphs take the whole percent of
+    // the size, half-width ones (Latin, digits, spaces) about half of it. Word
+    // doubles w:spacing on double-byte stretches (textPieces), so both write
+    // half the percent, except hangul in the faces Word keeps single (Malgun
+    // Gothic, NanumGothic…), which needs it whole
     const twips = (char.spacingPct / 100) * char.sizeHalfPoints * 10
-    run.charSpacingTwips = Math.round(DOUBLE_BYTE.test(text) ? twips / 2 : twips)
+    const single = kind === 'wide' && keepsHangulKanaSingle(run.eastAsiaFont) && isHangulText(text)
+    run.charSpacingTwips = Math.round(single ? twips : twips / 2)
   }
   return run
 }
@@ -655,7 +715,7 @@ const V_ALIGN: Record<string, CellInfo['vAlign']> = {
   BOTTOM: 'bottom',
 }
 
-async function tableXml(tbl: XNode, ctx: Ctx): Promise<string> {
+async function tableXml(tbl: XNode, ctx: Ctx, hostAlign?: string): Promise<string> {
   if (ctx.tableDepth >= MAX_TABLE_DEPTH) {
     ctx.drops.add('deep-nested-tables')
     return '<w:p/>'
@@ -711,7 +771,7 @@ async function tableXml(tbl: XNode, ctx: Ctx): Promise<string> {
       : ''
     const parts: string[] = [
       `<w:tbl><w:tblPr><w:tblW w:w="${colTw.reduce((a, b) => a + b, 0)}" w:type="dxa"/>` +
-        `<w:tblLayout w:type="fixed"/>${defaultMar}<w:tblLook w:val="0000"/></w:tblPr>`,
+        `${tablePlacementXml(tbl, hostAlign)}<w:tblLayout w:type="fixed"/>${defaultMar}<w:tblLook w:val="0000"/></w:tblPr>`,
       `<w:tblGrid>${colTw.map((width) => `<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>`,
     ]
     for (let r = 0; r < rows; r++) {
@@ -757,6 +817,25 @@ async function tableXml(tbl: XNode, ctx: Ctx): Promise<string> {
   } finally {
     ctx.tableDepth--
   }
+}
+
+/**
+ * Where the table sits across the column: a table set like a character
+ * (treatAsChar) follows its host paragraph's alignment, a placed one its
+ * horizontal alignment and offset. Vertical placement is the flow position.
+ */
+function tablePlacementXml(tbl: XNode, hostAlign?: string): string {
+  const pos = firstChild(tbl, 'hp:pos')
+  if (attr(pos, 'treatAsChar') === '1') {
+    return hostAlign === 'center' || hostAlign === 'right' ? `<w:jc w:val="${hostAlign}"/>` : ''
+  }
+  const horz = attr(pos, 'horzAlign')
+  if (attr(pos, 'horzRelTo') === 'PAGE') return ''
+  if (horz === 'CENTER') return '<w:jc w:val="center"/>'
+  if (horz === 'RIGHT') return '<w:jc w:val="right"/>'
+  const offset = hwpToTwips(intAttr(pos, 'horzOffset', 0))
+  // horzOffset is an unsigned 32-bit field: wrapped values are negative offsets
+  return offset > 0 && offset < 20000 ? `<w:tblInd w:w="${offset}" w:type="dxa"/>` : ''
 }
 
 /** usable page height (A4 with Hangul's default margins until a secPr is read) */

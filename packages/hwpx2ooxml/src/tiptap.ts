@@ -13,14 +13,18 @@
 
 import {
   parseDocx,
+  readSections,
   type Block,
   type CellBorders,
   type ParaAlign,
+  type ParaFormat,
   type Run,
   type TableCell,
   type TableModel,
   type TableParagraph,
 } from '../../docx-engine/src/index'
+import { HWP_COMPAT_CLASS, HWP_COMPAT_FACES } from './compat-faces'
+import { classifyFont } from './fonts'
 import { convertHwpToDocx } from './hwp'
 import type { HwpxToDocxResult } from './hwpx-docx'
 
@@ -37,12 +41,25 @@ export interface TiptapNode {
   text?: string
 }
 
-export interface HwpToTiptapResult extends HwpxToDocxResult {
+/** the first section's sheet, in points: a host lays the editor out on it */
+export interface TiptapPage {
+  widthPt: number
+  heightPt: number
+  marginTopPt: number
+  marginRightPt: number
+  marginBottomPt: number
+  marginLeftPt: number
+}
+
+export interface TiptapDocument {
   /** Tiptap document JSON (`editor.commands.setContent(doc)`) */
   doc: TiptapNode
   /** docx blocks with no Tiptap counterpart (section/body passthrough parts) */
   skipped: number
+  page?: TiptapPage
 }
+
+export type HwpToTiptapResult = HwpxToDocxResult & TiptapDocument
 
 const TWIPS_PER_PX = 15
 
@@ -58,15 +75,16 @@ const ALIGN: Partial<Record<ParaAlign, string>> = {
 /** Any Hancom word-processor file → Tiptap JSON, through the docx filter */
 export async function convertHwpToTiptap(bytes: Uint8Array): Promise<HwpToTiptapResult> {
   const converted = await convertHwpToDocx(bytes)
-  const { doc, skipped } = await docxToTiptap(converted.docx)
-  return { ...converted, doc, skipped }
+  return { ...converted, ...(await docxToTiptap(converted.docx)) }
 }
 
 /** A .docx (as written by the filter, or any other) → Tiptap JSON */
-export async function docxToTiptap(
-  docx: Uint8Array,
-): Promise<{ doc: TiptapNode; skipped: number }> {
+export async function docxToTiptap(docx: Uint8Array): Promise<TiptapDocument> {
   const parsed = await parseDocx(docx)
+  // an HWP-origin document names Hancom faces: chain their compat faces
+  // (apps/docs/src/renderer/fonts/hwp-compat.css) so a host that loads them
+  // breaks lines with Hangul's widths, as GenOffice does
+  hwpFaces = parsed.hwpSource === true
   const content: TiptapNode[] = []
   let skipped = 0
   for (const block of parsed.blocks) {
@@ -76,7 +94,47 @@ export async function docxToTiptap(
   }
   // a Tiptap document needs at least one block
   if (content.length === 0) content.push({ type: 'paragraph' })
-  return { doc: { type: 'doc', content }, skipped }
+  const sheet = readSections(parsed)[0]?.settings
+  const pt = (twips: number) => Math.round(twips / 2) / 10
+  const page = sheet
+    ? {
+        widthPt: pt(sheet.pageWidth),
+        heightPt: pt(sheet.pageHeight),
+        marginTopPt: pt(sheet.marginTop),
+        marginRightPt: pt(sheet.marginRight),
+        marginBottomPt: pt(sheet.marginBottom),
+        marginLeftPt: pt(sheet.marginLeft),
+      }
+    : undefined
+  return { doc: { type: 'doc', content }, skipped, ...(page ? { page } : {}) }
+}
+
+let hwpFaces = false
+
+/** CSS font-family for a run: the face, then its compat face in an HWP-origin document */
+function fontFamilyCss(face: string): string {
+  const quote = (name: string) => `'${name.replace(/'/g, '')}'`
+  const compat = hwpFaces ? HWP_COMPAT_FACES[face.normalize('NFC')] : undefined
+  if (!compat) return face
+  const generic =
+    HWP_COMPAT_CLASS[compat[0]] ??
+    ({ serif: 'serif', sans: 'sans-serif', mono: 'monospace' } as const)[classifyFont(face).cls]
+  return [quote(face), ...compat.map(quote), generic].join(', ')
+}
+
+/** paragraph geometry as inline CSS for a `style` attribute (stock Paragraph drops it) */
+function paragraphCss(format: ParaFormat): string {
+  const pt = (twips: number) => `${Math.round(twips / 2) / 10}pt`
+  const css: string[] = []
+  if (format.lineRawTwips && (format.lineRule === 'exact' || format.lineRule === 'atLeast')) {
+    css.push(`line-height:${pt(format.lineRawTwips)}`)
+  }
+  if (format.spaceBefore) css.push(`margin-top:${pt(format.spaceBefore)}`)
+  if (format.spaceAfter) css.push(`margin-bottom:${pt(format.spaceAfter)}`)
+  if (format.indentLeft) css.push(`padding-left:${pt(format.indentLeft)}`)
+  if (format.indentRight) css.push(`padding-right:${pt(format.indentRight)}`)
+  if (format.indentFirstLine) css.push(`text-indent:${pt(format.indentFirstLine)}`)
+  return css.join(';')
 }
 
 function blockNode(block: Block): TiptapNode | null {
@@ -105,11 +163,16 @@ function blockNode(block: Block): TiptapNode | null {
   }
 }
 
-function paragraphNode(format: { align?: ParaAlign }, content: TiptapNode[]): TiptapNode {
+function paragraphNode(format: ParaFormat, content: TiptapNode[]): TiptapNode {
   const align = format.align ? ALIGN[format.align] : undefined
+  const style = paragraphCss(format)
+  const attrs = {
+    ...(align && align !== 'left' ? { textAlign: align } : {}),
+    ...(style ? { style } : {}),
+  }
   return {
     type: 'paragraph',
-    ...(align && align !== 'left' ? { attrs: { textAlign: align } } : {}),
+    ...(Object.keys(attrs).length > 0 ? { attrs } : {}),
     ...(content.length > 0 ? { content } : {}),
   }
 }
@@ -162,7 +225,7 @@ function runMarks(run: Run): TiptapMark[] {
   const style: Record<string, string> = {}
   if (run.color && run.color !== 'auto') style.color = `#${run.color}`
   const font = run.eastAsiaFont ?? run.font
-  if (font) style.fontFamily = font
+  if (font) style.fontFamily = fontFamilyCss(font)
   if (run.sizeHalfPoints) style.fontSize = `${run.sizeHalfPoints / 2}pt`
   if (Object.keys(style).length > 0) marks.push({ type: 'textStyle', attrs: style })
   const highlight = run.shading ?? run.highlight

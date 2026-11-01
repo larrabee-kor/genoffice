@@ -239,13 +239,16 @@ describe('convertHwpxToDocx', () => {
       'Target="settings.xml"',
     )
     const parsed = await parseDocx(docx)
-    expect(parsed).toMatchObject({ balanceDbcsSpacing: true, useFELayout: true })
-    // spacing -5% of 16pt = -16 twips; Word doubles it on Hangul under the flag
+    // and marks the document HWP-origin, so GenOffice draws the Hancom faces with their compat faces
+    expect(parsed).toMatchObject({ balanceDbcsSpacing: true, useFELayout: true, hwpSource: true })
+    // spacing -5% of 16pt = -16 twips on a full-width glyph: Word doubles the
+    // -8 written on Hangul under the flag; Hangul's percent of a half-width
+    // Latin glyph's own advance is about -8 too
     const doc = await documentXml(docx)
     const hangul = doc.slice(doc.indexOf('자간') - 300, doc.indexOf('자간'))
     expect(hangul).toContain('<w:spacing w:val="-8"/>')
     const latin = doc.slice(doc.indexOf('ABC') - 300, doc.indexOf('ABC'))
-    expect(latin).toContain('<w:spacing w:val="-16"/>')
+    expect(latin).toContain('<w:spacing w:val="-8"/>')
   })
 
   it("fits table rows to Hangul's row heights", async () => {

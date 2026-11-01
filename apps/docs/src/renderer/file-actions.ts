@@ -96,6 +96,7 @@ import {
   setAdditiveParagraphSpacing,
   setDocFontTable,
   setHangulSpaceWidening,
+  setHwpCompatFonts,
 } from './line-metrics'
 import { adoptEmbeddedFonts } from './embedded-fonts'
 import { prefetchFaces } from './font-resolve'
@@ -374,6 +375,7 @@ function applyDocLayoutSettings(editor: Editor, parsed: ParsedDocFull): void {
   editor.storage.cjkPunctShrink.legacyLayout = (parsed.compatibilityMode ?? 0) < 15
   editor.storage.cjkPunctShrink.docEastAsiaLang = parsed.docDefaults?.eastAsiaLang ?? null
   setHangulSpaceWidening(hangulSpaceWideningFor(parsed))
+  setHwpCompatFonts(parsed.hwpSource === true)
   setStaticAsciiResolver(() => editor.storage.listNumbering)
   // Chromium only hyphenates under an explicit lang (the app shell is zh-CN);
   // scoped to autoHyphenation docs so CJK font fallback is untouched elsewhere

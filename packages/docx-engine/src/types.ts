@@ -2577,6 +2577,8 @@ export interface ParsedDoc {
   balanceDbcsSpacing?: boolean
   /** settings.xml w:compat <w:useFELayout/> — with balanceDbcsSpacing, hangul-context spaces widen to 0.5em */
   useFELayout?: boolean
+  /** settings.xml docVar GenOfficeSourceFormat=hwp: converted from HWP/HWPX, Hancom faces draw with their compat faces */
+  hwpSource?: boolean
   /** settings.xml w:characterSpacingControl compressPunctuation* — justified CJK lines compress trailing-blank punctuation */
   compressPunctuation?: boolean
   /** settings.xml w:compat <w:adjustLineHeightInTable/> — table-cell lines snap to the typed docGrid like body lines */

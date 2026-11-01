@@ -44,6 +44,7 @@ import {
   type LineFactorStage,
 } from './line-factors.generated'
 import standInBoxesJson from './fonts/stand-in-boxes.json'
+import { HWP_COMPAT_FACES } from '../../../../packages/hwpx2ooxml/src/compat-faces'
 
 // ─── Font metrics interface (same interface as pptx-render/metrics.ts) ─────
 
@@ -636,7 +637,8 @@ export const BUNDLED_FONTS = new Set([
 ])
 const BUNDLED_LC = new Set([...BUNDLED_FONTS].map((f) => f.toLowerCase()))
 export function isBundledFont(name: string): boolean {
-  return BUNDLED_LC.has(name.toLowerCase())
+  const lc = name.toLowerCase()
+  return BUNDLED_LC.has(lc) || lc.startsWith('hwp compat ')
 }
 
 const fontAvailableCache = new Map<string, boolean>()
@@ -1167,7 +1169,38 @@ function substituteFontFamily(font: string): string | null {
   return lead ? `${lead},${chain}` : chain
 }
 
+let hwpCompatFonts = false
+/**
+ * Documents converted from HWP/HWPX (ParsedDoc.hwpSource) draw the Hancom
+ * faces they name with their compat faces (fonts/hwp-compat.css): Noto
+ * outlines on Hancom's own advances, so lines break where Hangul broke them.
+ * Word documents naming the same faces keep Word's substitutes.
+ */
+export function setHwpCompatFonts(on: boolean): void {
+  hwpCompatFonts = on
+}
+
+/** the open document was converted from HWP/HWPX: Hangul's layout rules apply where they differ from Word's */
+export function hwpLayoutOn(): boolean {
+  return hwpCompatFonts
+}
+
+/** the faces a Hancom face name draws with in an HWP-origin document */
+export function hwpCompatFace(font: string): readonly string[] | null {
+  if (!hwpCompatFonts) return null
+  const head = font.split(',')[0].replace(/['"]/g, '').normalize('NFC').trim()
+  return HWP_COMPAT_FACES[head] ?? null
+}
+
 export function cssFontFamily(font: string): string {
+  const chain = wordCssFontFamily(font)
+  const compat = hwpCompatFace(font)
+  // the compat face covers Latin, symbols and syllables; anything else (Han,
+  // rare symbols) falls through to the substitute chain as before
+  return compat ? `${cssChain(...compat)},${chain}` : chain
+}
+
+function wordCssFontFamily(font: string): string {
   // faces Word lays out directly take the chain of their target face, names it
   // substitutes the chain of the substitute; the name-keyed branches below
   // serve unkeyed targets and the script chains
@@ -2391,6 +2424,13 @@ export function hangulSpaceWideningOn(): boolean {
  *  half-width space span lifts Japanese line boxes, so that stays unported. */
 export function hangulSpaceOffsets(text: string, prev = '', next = ''): number[] {
   const out: number[] = []
+  // Hangul sets every space half an em wide (charPr useFontSpace="0", nearly
+  // every HWP character shape), whatever touches it: an HWP-origin document's
+  // leading and Latin-side spaces widen too (rhwp's Hancom PDF ladder: 0.500 em)
+  if (hwpCompatFonts) {
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 0x20) out.push(i)
+    return out
+  }
   let prevCp = prev ? lastCodePoint(prev) : -1
   for (let i = 0; i < text.length;) {
     const cp = text.codePointAt(i)!

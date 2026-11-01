@@ -65,6 +65,33 @@ Traditional Chinese serif chain: Songti TC draws those fullwidth glyphs at
 rendered as a spaced half-width slash. Real PMingLiU (Windows) still wins by
 chain order; advances are 1.0em everywhere, so line breaking is unchanged.
 
+## HWP compat faces
+
+| Font                                       | Role                                                    |
+| ------------------------------------------ | ------------------------------------------------------- |
+| HWP Compat \<face\> (`hwp-compat/*.woff2`) | Hancom faces named by documents converted from HWP/HWPX |
+
+Documents converted by `@genoffice/hwpx2ooxml` name Hancom faces (휴먼명조,
+한양신명조, HY헤드라인M, 함초롬바탕…) and Hangul breaks their lines with those
+faces' own advances. Each compat face is the non-Hangul part of the face's
+coverage: outlines from GenOffice Serif KR / Sans KR above (Noto CJK KR, SIL
+OFL 1.1, so the same `LICENSE-OFL.txt` applies), each glyph moved onto the
+Hancom advance width, layout tables dropped. Hangul syllables reuse the 1 em
+KR subsets through a second `@font-face` (scaled for faces whose syllables
+are narrower). Spaces are half an em, Hangul's own rule for character shapes
+without `useFontSpace`.
+
+The widths come from rhwp's per-font metric tables and the values its
+maintainers measured from Hancom-exported PDFs (https://github.com/edwardkim/rhwp,
+MIT, Copyright (c) 2025-2026 Edward Kim), extracted into
+`tools/hwp-compat/hancom-metrics.json` by `tools/hwp-compat/extract-rhwp-metrics.py`;
+`tools/hwp-compat/build-hwp-compat-fonts.py` writes the faces, `hwp-compat.css`
+and `packages/hwpx2ooxml/src/compat-faces.ts`. No Hancom font file is read.
+The faces are used only for documents carrying the converter's
+`GenOfficeSourceFormat=hwp` document variable (`line-metrics.ts`
+`setHwpCompatFonts`); Word documents naming the same faces keep Word's
+substitutes, and saved documents keep the original face names.
+
 ## Korean fallback
 
 | Font                                 | Role                                                        |

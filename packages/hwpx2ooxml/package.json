@@ -7,7 +7,8 @@
   "description": "HWP/HWPX (Hancom) import filter: .hwpx → .docx parsed locally, .hwp read through rhwp (MIT) into HWPX first, rebuilt through docx-engine; the same output as Tiptap JSON",
   "exports": {
     ".": "./src/index.ts",
-    "./tiptap": "./src/tiptap.ts"
+    "./tiptap": "./src/tiptap.ts",
+    "./compat-faces": "./src/compat-faces.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
