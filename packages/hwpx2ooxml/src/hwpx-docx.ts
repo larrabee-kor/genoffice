@@ -321,8 +321,10 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
       // picture: lawgo-9 sets 610 Hanja as 15.6pt pictures in lines advancing
       // 11pt and draws them over each other's margins); the saved layout has
       // that advance, so the line keeps it exactly (GenOffice lets such a
-      // picture overlap in HWP-origin documents, styles.css)
-      const saved = hasPicture ? savedLineAdvance(p) : 0
+      // picture overlap in HWP-origin documents, styles.css). A paragraph of
+      // pictures alone is already as tall as its pictures (ftc-57's product
+      // photos), so it keeps the picture line GenOffice gives it
+      const saved = hasPicture && !textless ? savedLineAdvance(p) : 0
       if (saved > 0) {
         paraFormat.lineRule = 'exact'
         paraFormat.lineRawTwips = saved
