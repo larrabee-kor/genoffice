@@ -1221,38 +1221,68 @@ async function cellInfo(tc: XNode, rowIndex: number, ctx: Ctx): Promise<CellInfo
 }
 
 /**
- * Column widths from the cells: single-column cells pin their column; spanned
- * cells then share their remaining width among the columns still unknown;
- * whatever is left splits the table width evenly.
+ * Column widths from the cells: each cell spans a known distance between two
+ * column boundaries, so the boundaries follow from the left edge; any the
+ * cells leave open split the remaining width evenly.
  */
 function columnWidths(cells: CellInfo[], cols: number, tableWidth: number): number[] {
-  const widths: Array<number | null> = Array.from({ length: cols }, () => null)
-  for (const cell of cells) {
-    if (cell.colSpan === 1 && cell.widthHwp > 0 && cell.col < cols && widths[cell.col] === null) {
-      widths[cell.col] = cell.widthHwp
-    }
-  }
-  for (let pass = 0; pass < 4; pass++) {
+  // every cell pins the distance between two column boundaries; propagate
+  // the boundary positions from the left edge (and back from the right)
+  const x: Array<number | null> = Array.from({ length: cols + 1 }, () => null)
+  x[0] = 0
+  // narrow cells first: a wide merged cell may disagree with the columns it
+  // covers (Hangul keeps a 44790 heading over 2830 + 18839 + 23791 columns)
+  const bySpan = [...cells].sort((a, b) => a.colSpan - b.colSpan)
+  for (let pass = 0; pass < cols + 2; pass++) {
     let changed = false
-    for (const cell of [...cells].sort((a, b) => a.colSpan - b.colSpan)) {
-      if (cell.colSpan === 1 || cell.widthHwp <= 0) continue
-      const range = widths.slice(cell.col, cell.col + cell.colSpan)
-      const unknown = range.filter((width) => width === null).length
-      if (unknown === 0) continue
-      const known = range.reduce<number>((sum, width) => sum + (width ?? 0), 0)
-      const share = Math.max(100, Math.round((cell.widthHwp - known) / unknown))
-      for (let c = cell.col; c < Math.min(cols, cell.col + cell.colSpan); c++) {
-        if (widths[c] === null) widths[c] = share
+    for (const cell of bySpan) {
+      if (cell.widthHwp <= 0) continue
+      const a = cell.col
+      const b = Math.min(cols, cell.col + cell.colSpan)
+      if (a >= b) continue
+      if (x[a] !== null && x[b] === null) {
+        x[b] = x[a]! + cell.widthHwp
+        changed = true
+      } else if (x[b] !== null && x[a] === null) {
+        x[a] = x[b]! - cell.widthHwp
+        changed = true
       }
-      changed = true
     }
     if (!changed) break
   }
-  const known = widths.reduce<number>((sum, width) => sum + (width ?? 0), 0)
-  const unknown = widths.filter((width) => width === null).length
-  const fallback =
-    unknown > 0 ? Math.max(500, Math.round(((tableWidth || 48000) - known) / unknown)) : 0
-  return widths.map((width) => width ?? fallback)
+  if (x[cols] === null) x[cols] = tableWidth > 0 ? tableWidth : 48000
+  // Hangul's cells do not always agree (row sums differ): settle every
+  // boundary on the mean of what the cells touching it imply, a least-squares
+  // fit the majority of agreeing cells dominates
+  const constraints = cells
+    .filter((cell) => cell.widthHwp > 0 && cell.col < cols)
+    .map((cell) => ({ a: cell.col, b: Math.min(cols, cell.col + cell.colSpan), w: cell.widthHwp }))
+  for (let iteration = 0; iteration < 60; iteration++) {
+    for (let k = 1; k <= cols; k++) {
+      if (x[k] === null) continue
+      let sum = 0
+      let n = 0
+      for (const c of constraints) {
+        if (c.b === k && x[c.a] !== null) {
+          sum += x[c.a]! + c.w
+          n++
+        } else if (c.a === k && x[c.b] !== null) {
+          sum += x[c.b]! - c.w
+          n++
+        }
+      }
+      if (n > 0) x[k] = sum / n
+    }
+  }
+  // boundaries no cell pins: spread evenly between the known ones
+  for (let c = 1; c < cols; c++) {
+    if (x[c] !== null) continue
+    let next = c + 1
+    while (x[next] === null) next++
+    const prev = x[c - 1]!
+    x[c] = prev + (x[next]! - prev) / (next - c + 1)
+  }
+  return Array.from({ length: cols }, (_, c) => Math.max(1, Math.round(x[c + 1]! - x[c]!)))
 }
 
 function bordersXml(border: BorderFill | null): string {
