@@ -24,6 +24,7 @@ import {
   emptyEaSlotHangulFactor,
   facesDiffer,
   fontBoxCss,
+  hwpLayoutOn,
   isCjkFontName,
   lineHeightFactor,
   nonCjkInkRanges,
@@ -897,6 +898,9 @@ export function lineBoxSpec(
   // never snaps, including the line="0" opt-out form), multiples scale.
   // Cells stay off the typed grid (gridBlocks excludes .doc-cell-para)
   const fixedLh = (lineRule === 'exact' && lineRawTwips) || lineRule === 'atLeast'
+  // HWP-origin exact lines, cells included: pictures set like characters do not
+  // grow them (styles.css .doc-hwp-lh-exact)
+  if (lineRule === 'exact' && lineRawTwips && hwpLayoutOn()) classes.push('doc-hwp-lh-exact')
   if (fixedLh) {
     if (kind !== 'cell') classes.push('doc-lh-fixed')
   } else {

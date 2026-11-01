@@ -34,7 +34,15 @@ import {
 } from '../../docx-engine/src/index'
 import { bmpToPng } from './bmp'
 import { withFontTable } from './fonts'
-import { advancePt, condensedSpaces, plainParagraph, type PlainChar } from './condense'
+import {
+  advancePt,
+  condensedSpaces,
+  glyphEm,
+  isWideGlyph,
+  plainParagraph,
+  slotMetrics,
+  type PlainChar,
+} from './condense'
 import { withHeaderFooter, type HeaderFooterParts } from './headerfooter'
 import { HeadingCounter, readHeadings, type Head } from './numbering'
 import { withHangulLayoutSettings } from './settings'
@@ -308,13 +316,29 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
         !over && segments.some((segment) => segment.kind === 'picture' && !segment.floating)
       paraFormat.lineRule = hasPicture ? 'atLeast' : 'exact'
       paraFormat.lineRawTwips = Math.round(largest * 10 * (shape.linePercent / 100))
+      // a picture set like a character makes the line as tall as itself, and
+      // Hangul spaces that line by the percent too (below 100% a share of the
+      // picture: lawgo-9 sets 610 Hanja as 15.6pt pictures in lines advancing
+      // 11pt and draws them over each other's margins); the saved layout has
+      // that advance, so the line keeps it exactly (GenOffice lets such a
+      // picture overlap in HWP-origin documents, styles.css)
+      const saved = hasPicture ? savedLineAdvance(p) : 0
+      if (saved > 0) {
+        paraFormat.lineRule = 'exact'
+        paraFormat.lineRawTwips = saved
+      }
       delete paraFormat.lineSpacing
       // the gap under a cell's last line is not laid out (the row ends at the
       // glyphs), so its lines share the height Hangul recorded for them
       const cellEnd =
-        final && lastInCell && !hadTable && !hasPicture && !over ? lastLinesHeight(p) : 0
+        final && lastInCell && !hadTable && (!hasPicture || saved > 0) && !over
+          ? lastLinesHeight(p)
+          : 0
       if (cellEnd > 0) paraFormat.lineRawTwips = cellEnd
     }
+    // nor is the space under a cell's last paragraph: Hangul's row ends at its
+    // last line (lawgo-9's Hanja rows keep 30.5pt with 10pt below each cell)
+    if (final && lastInCell && !hadTable) paraFormat.spaceAfter = 0
     if (over && segments[0].kind === 'picture') {
       segments = [
         {
@@ -408,8 +432,9 @@ async function paragraphBlocks(p: XNode, ctx: Ctx, lastInCell = false): Promise<
           segments.push({
             kind: 'picture',
             xml,
+            heightHwp: height,
             ...(over ? { overHwp: over } : {}),
-            ...(asChar ? {} : { floating: true, heightHwp: height }),
+            ...(asChar ? {} : { floating: true }),
           })
           break
         }
@@ -455,6 +480,18 @@ function headWidthTw(head: Head, char: CharShape): number {
   return Math.round(pt * 20)
 }
 
+/** the tallest line advance (height + gap) of a paragraph's saved layout, in twips; 0 without one */
+function savedLineAdvance(p: XNode): number {
+  const array = firstChild(p, 'hp:linesegarray')
+  if (!array) return 0
+  let tallest = 0
+  for (const { name, node } of elements(array)) {
+    if (name !== 'hp:lineseg') continue
+    tallest = Math.max(tallest, intAttr(node, 'vertsize', 0) + intAttr(node, 'spacing', 0))
+  }
+  return tallest > 0 ? hwpToTwips(tallest) : 0
+}
+
 /**
  * Per-line height of a paragraph whose last line gap is dropped, from the
  * layout Hangul saved with it (hp:linesegarray): the lines' heights plus the
@@ -496,14 +533,129 @@ function appendText(segments: Segment[], text: string, char: CharShape): void {
     })
     return
   }
-  for (const piece of textPieces(text, char)) pushRun(segments, runOf(piece.text, char, piece.kind))
+  if (!char.sizeHalfPoints || (!char.spacingPct && !char.slots)) {
+    pushRun(segments, runOf(text, char))
+    return
+  }
+  spacedRuns(segments, text, char)
 }
 
-/** append a run, merged into the previous one when the formatting matches (fewer w:r) */
+/** the running difference (twips) between Hangul's letter spacing and the written one, per paragraph piece */
+const spacingCarry = new WeakMap<Segment[], number>()
+/** how far the written spacing may drift from Hangul's before the value changes (0.15pt) */
+const SPACING_SLACK_TWIPS = 3
+
+/**
+ * Text whose character shape has letter spacing or per-language scales.
+ * Hangul's letter spacing is a percent of each glyph's own advance (rhwp
+ * text_measurement: 휴먼명조 '*' 0.5 em at -9% spaces 0.455 em); OOXML's
+ * w:spacing is whole twips per glyph, and under the balanced-width setting
+ * (settings.ts) Word doubles it on double-byte glyphs except hangul and kana
+ * in the faces it keeps single (Malgun Gothic, NanumGothic…). GenOffice
+ * spreads that doubling over a run by its share of double-byte glyphs, so
+ * double-byte and other glyphs go in separate runs. The whole-twip value
+ * misses Hangul's (-1% of 14pt: 0.14pt a syllable, written 0.1pt), which over
+ * a 30-syllable line pushed the last syllable down (ftc-58, korea-156787108),
+ * so the written value alternates between its neighbours to keep the running
+ * total within SPACING_SLACK_TWIPS of Hangul's. Each language slot keeps its
+ * own scale and spacing (lawgo-14: digits at 0%, hangul at -5%).
+ */
+function spacedRuns(segments: Segment[], text: string, char: CharShape): void {
+  const size = (char.sizeHalfPoints ?? 20) / 2
+  const singleFace = keepsHangulKanaSingle(char.fontHangul ?? char.fontLatin)
+  let carry = spacingCarry.get(segments) ?? 0
+  let written: number | null = null
+  let group = ''
+  let key = ''
+  let groupValue = 0
+  let groupScale = 100
+  const flush = (): void => {
+    if (!group) return
+    const run = runOf(group, char)
+    if (groupScale !== 100) run.charScalePct = Math.min(600, Math.max(1, groupScale))
+    else delete run.charScalePct
+    if (groupValue) run.charSpacingTwips = groupValue
+    else delete run.charSpacingTwips
+    pushRun(segments, run)
+    group = ''
+  }
+  for (const ch of text) {
+    const metrics = slotMetrics(ch, char)
+    const doubled = doubledSpacing(ch, singleFace)
+    let value = 0
+    if (metrics.spacingPct) {
+      const em = glyphEm(ch, char) ?? (isWideGlyph(ch) ? 1000 : 500)
+      const exact = (metrics.spacingPct / 100) * (em / 1000) * size * (metrics.scalePct / 100) * 20
+      const mult = doubled ? 2 : 1
+      // only the whole values either side of Hangul's: keep the current one
+      // while the running total allows, else take the one that pulls it back
+      const lo = Math.floor(exact / mult)
+      const hi = Math.ceil(exact / mult)
+      const error = (v: number): number => Math.abs(carry + exact - v * mult)
+      if (
+        written !== null &&
+        (written === lo || written === hi) &&
+        error(written) <= SPACING_SLACK_TWIPS
+      ) {
+        value = written
+      } else {
+        value = error(lo) <= error(hi) ? lo : hi
+      }
+      carry += exact - value * mult
+      written = value
+    }
+    const next = `${doubled}|${value}|${metrics.scalePct}`
+    if (next !== key) {
+      flush()
+      key = next
+      groupValue = value
+      groupScale = metrics.scalePct
+    }
+    group += ch
+  }
+  flush()
+  spacingCarry.set(segments, carry)
+}
+
+/** Word doubles letter spacing on this glyph under the balanced-width setting (docx-engine doubledGlyphFraction) */
+function doubledSpacing(ch: string, singleFace: boolean): boolean {
+  const cp = ch.codePointAt(0)!
+  if (!isDoubleByte(cp)) return false
+  const hangulKana =
+    (cp >= 0x1100 && cp <= 0x11ff) ||
+    (cp >= 0x3040 && cp <= 0x30ff) ||
+    (cp >= 0x3130 && cp <= 0x318f) ||
+    (cp >= 0x31f0 && cp <= 0x31ff) ||
+    (cp >= 0xac00 && cp <= 0xd7af)
+  return !(hangulKana && singleFace)
+}
+
+/**
+ * append a run, merged into the previous one when the formatting matches
+ * (fewer w:r); spaced double-byte and other glyphs stay apart (spacedRuns)
+ */
 function pushRun(segments: Segment[], run: Run): void {
   const last = segments[segments.length - 1]
-  if (last && last.kind === 'run' && sameFormat(last.run, run)) last.run.text += run.text
-  else segments.push({ kind: 'run', run })
+  if (
+    last &&
+    last.kind === 'run' &&
+    sameFormat(last.run, run) &&
+    (!run.charSpacingTwips || spacingClass(last.run) === spacingClass(run))
+  ) {
+    last.run.text += run.text
+  } else segments.push({ kind: 'run', run })
+}
+
+/** whether a run's glyphs take Word's doubled letter spacing: all, none or a mix */
+function spacingClass(run: Run): 'all' | 'none' | 'mixed' {
+  const single = keepsHangulKanaSingle(run.eastAsiaFont)
+  let doubled = 0
+  let n = 0
+  for (const ch of run.text) {
+    if (doubledSpacing(ch, single)) doubled++
+    n++
+  }
+  return doubled === 0 ? 'none' : doubled === n ? 'all' : 'mixed'
 }
 
 /**
@@ -522,34 +674,13 @@ function fixedSpaceRun(char: CharShape): Run {
   return run
 }
 
-type PieceKind = 'wide' | 'other'
-
-/**
- * Text split where Word applies letter spacing differently from the rest of
- * the run: under the balanced-width setting (settings.ts) Word doubles
- * w:spacing on double-byte glyphs except hangul in a few faces (runOf).
- * Glyph widths themselves are the compat faces' business (tools/hwp-compat),
- * not the converter's.
- */
-function textPieces(text: string, char: CharShape): Array<{ text: string; kind: PieceKind }> {
-  // only a face Word keeps single gives double-byte stretches a different value
-  const single = keepsHangulKanaSingle(char.fontHangul ?? char.fontLatin)
-  if (!char.spacingPct || !char.sizeHalfPoints || !single) return [{ text, kind: 'other' }]
-  const pieces: Array<{ text: string; kind: PieceKind }> = []
-  for (const ch of text) {
-    const kind: PieceKind = isDoubleByte(ch.codePointAt(0)!) ? 'wide' : 'other'
-    const last = pieces[pieces.length - 1]
-    if (last?.kind === kind) last.text += ch
-    else pieces.push({ text: ch, kind })
-  }
-  return pieces
-}
-
 /** what Word counts as double-byte for balanced spacing (docx-engine doubledGlyphFraction) */
 function isDoubleByte(cp: number): boolean {
   return (
     (cp >= 0x1100 && cp <= 0x11ff) ||
     (cp >= 0x2e80 && cp <= 0x9fff) ||
+    (cp >= 0x3130 && cp <= 0x318f) ||
+    (cp >= 0x31f0 && cp <= 0x31ff) ||
     (cp >= 0xac00 && cp <= 0xd7af) ||
     (cp >= 0xf900 && cp <= 0xfaff) ||
     (cp >= 0xff00 && cp <= 0xff60) ||
@@ -566,7 +697,7 @@ function sameFormat(a: Run, b: Run): boolean {
 const isHangulText = (text: string): boolean =>
   /^[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]+$/.test(text)
 
-function runOf(text: string, char: CharShape, kind: PieceKind = 'other'): Run {
+function runOf(text: string, char: CharShape): Run {
   const run: Run = { text }
   if (char.bold) run.bold = true
   if (char.italic) run.italic = true
@@ -585,15 +716,12 @@ function runOf(text: string, char: CharShape, kind: PieceKind = 'other'): Run {
   if (latin) run.fontAscii = latin
   if (char.scalePct) run.charScalePct = Math.min(600, Math.max(1, char.scalePct))
   if (char.spacingPct && char.sizeHalfPoints) {
-    // Hangul letter spacing is a percent of each glyph's own advance (rhwp
-    // text_measurement: 휴먼명조 '*' 0.5 em at -9% spaces 0.455 em), OOXML's a
-    // fixed twip amount per glyph. Full-width glyphs take the whole percent of
-    // the size, half-width ones (Latin, digits, spaces) about half of it. Word
-    // doubles w:spacing on double-byte stretches (textPieces), so both write
-    // half the percent, except hangul in the faces Word keeps single (Malgun
-    // Gothic, NanumGothic…), which needs it whole
+    // a single value for the whole text (spacedRuns refines it per glyph):
+    // full-width glyphs take the whole percent of the size, half-width ones
+    // half of it, and Word doubles w:spacing on double-byte glyphs except
+    // hangul in the faces it keeps single
     const twips = (char.spacingPct / 100) * char.sizeHalfPoints * 10
-    const single = kind === 'wide' && keepsHangulKanaSingle(run.eastAsiaFont) && isHangulText(text)
+    const single = keepsHangulKanaSingle(run.eastAsiaFont) && isHangulText(text)
     run.charSpacingTwips = Math.round(single ? twips : twips / 2)
   }
   return run
@@ -1259,7 +1387,15 @@ function rowContentHeight(
   tableMargin: { top: number; bottom: number },
 ): number {
   if (heightHwp <= 0) return 0
-  const inRow = cells.filter((cell) => cell.row <= r && r < cell.row + cell.rowSpan)
+  // the row's own cells: a cell merged down from a row above sits in that
+  // row's w:tr (one rowspan cell in GenOffice), so its margins and rules do
+  // not add to this row (ftc-57's discount table lost 1.5pt a row to the
+  // double rule of the cell spanning it)
+  const starting = cells.filter((cell) => cell.row === r)
+  const inRow =
+    starting.length > 0
+      ? starting
+      : cells.filter((cell) => cell.row <= r && r < cell.row + cell.rowSpan)
   let top = 0
   let bottom = 0
   let gridline = 0

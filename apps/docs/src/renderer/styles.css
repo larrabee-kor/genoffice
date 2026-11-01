@@ -7219,6 +7219,21 @@ body.docs-crop-active .doc-protected[data-doc-protected='image'] .doc-img-wrap {
   vertical-align: bottom;
 }
 
+/* HWP-origin documents: a picture set like a character makes Hangul's line
+   as tall as itself, and a percent below 100 then spaces the next line closer
+   than the picture is tall, so it overlaps (lawgo-9 sets 610 Hanja as 15.6pt
+   pictures in lines advancing 11pt). The converter writes that saved advance
+   as an exact line; the picture rests on the line's bottom and only the part
+   taller than the line overlaps, so the line keeps its height. */
+.doc-hwp-lh-exact .doc-inline-img--hwp {
+  vertical-align: bottom;
+  margin-top: min(0px, calc(var(--doc-lh-cap, 0px) - var(--doc-obj-h, 0px)));
+}
+
+.doc-hwp-lh-exact .doc-inline-pic:has(> .doc-inline-img--hwp) {
+  vertical-align: bottom;
+}
+
 /* floating (wp:anchor) run pictures: zero-size marker at the run, the picture
    overlays without consuming flow space. The hosting paragraph is the
    positioning origin — wp:posOffset measures from the column / paragraph top

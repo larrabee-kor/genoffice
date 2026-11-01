@@ -50,6 +50,7 @@ import {
   cssFontFamily,
   hangulSpaceOffsets,
   hangulSpaceWideningOn,
+  hwpLayoutOn,
   cssLeadTop,
   cssLineHeight,
   cssExactLineCap,
@@ -810,7 +811,11 @@ export const DocInlineImage = Node.create({
     // (0.75em ≈ half a single-spaced line) instead of hanging below it
     if (node.attrs.lineCenterV && h > 0) margin.top = `calc(0.75em - ${px(h / 2)})`
     // an in-line picture's line snaps to whole grid cells (doc-style-css)
-    if (!wrap && !qt && !node.attrs.lineCenterV && h > 0) styles.push(`--doc-obj-h:${px(h)}`)
+    if (!wrap && !qt && !node.attrs.lineCenterV && h > 0) {
+      styles.push(`--doc-obj-h:${px(h)}`)
+      // HWP-origin: an exact line keeps its height under the picture (styles.css)
+      if (hwpLayoutOn()) attrs.class += ' doc-inline-img--hwp'
+    }
     for (const side of ['top', 'right', 'bottom', 'left'] as const) {
       if (margin[side] != null) styles.push(`margin-${side}:${margin[side]}`)
     }

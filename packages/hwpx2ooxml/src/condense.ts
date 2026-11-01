@@ -14,7 +14,7 @@
  * cannot explain within the condense share is left alone.
  */
 
-import type { CharShape } from './header'
+import type { CharShape, ScriptSlot } from './header'
 import { HWP_COMPAT_METRICS } from './compat-metrics'
 import { attr, elements, firstChild, intAttr, type XNode } from './xml'
 
@@ -44,23 +44,60 @@ const SYLLABLE = /[가-힣]/
 const WIDE =
   /[\u1100-\u11ff\u203b\u2460-\u24ff\u2500-\u27bf\u2e80-\u9fff\uf900-\ufaff\uff00-\uff60]/
 
-/** advance of one character in points, as Hangul sets it; null when no table covers its face */
-export function advancePt(ch: string, char: CharShape): number | null {
-  const size = (char.sizeHalfPoints ?? 20) / 2
-  const ratio = (char.scalePct ?? 100) / 100
-  const spacing = (char.spacingPct ?? 0) / 100
-  // Hangul's fixed-width space (hwpx-docx FIXED_SPACE): a quarter em
-  if (ch === '\u2005') return size * 0.25 * ratio * (1 + spacing)
+/**
+ * The language slot Hangul shapes a character with: each slot of a character
+ * shape carries its own scale and letter spacing. Spaces stay with the
+ * Hangul slot.
+ */
+export function slotOf(ch: string): 'hangul' | ScriptSlot {
+  const cp = ch.codePointAt(0)!
+  if (cp === 0x20 || (cp >= 0x1100 && cp <= 0x11ff) || (cp >= 0x3130 && cp <= 0x318f))
+    return 'hangul'
+  if ((cp >= 0xa960 && cp <= 0xa97f) || (cp >= 0xac00 && cp <= 0xd7ff)) return 'hangul'
+  if (cp < 0x0250 || (cp >= 0x1e00 && cp <= 0x1eff)) return 'latin'
+  if ((cp >= 0x2e80 && cp <= 0x2fdf) || (cp >= 0x3400 && cp <= 0x9fff)) return 'hanja'
+  if ((cp >= 0xf900 && cp <= 0xfaff) || cp >= 0x20000) return 'hanja'
+  if ((cp >= 0x3040 && cp <= 0x30ff) || (cp >= 0x31f0 && cp <= 0x31ff)) return 'japanese'
+  if ((cp >= 0x2000 && cp <= 0x2bff) || (cp >= 0x3000 && cp <= 0x303f)) return 'symbol'
+  if ((cp >= 0x3200 && cp <= 0x33ff) || (cp >= 0xff00 && cp <= 0xffef)) return 'symbol'
+  return 'other'
+}
+
+/** a character's scale and letter spacing percents, from its language slot */
+export function slotMetrics(ch: string, char: CharShape): { scalePct: number; spacingPct: number } {
+  const slot = char.slots ? slotOf(ch) : 'hangul'
+  const own = slot === 'hangul' ? undefined : char.slots?.[slot]
+  if (own) return { scalePct: own.scalePct ?? 100, spacingPct: own.spacingPct ?? 0 }
+  return { scalePct: char.scalePct ?? 100, spacingPct: char.spacingPct ?? 0 }
+}
+
+/**
+ * A glyph's Hancom advance in 1/1000 em (before scale and letter spacing);
+ * null when no table covers its face. Hangul's fixed-width space
+ * (hwpx-docx FIXED_SPACE) is a quarter em.
+ */
+export function glyphEm(ch: string, char: CharShape): number | null {
+  if (ch === '\u2005') return 250
   const syllable = SYLLABLE.test(ch)
   const face = syllable || WIDE.test(ch) ? char.fontHangul : (char.fontLatin ?? char.fontHangul)
   const metric = face ? HWP_COMPAT_METRICS[face] : undefined
   if (!face || !metric) return null
-  let em: number
-  if (syllable) em = metric.hangul
-  else em = advancesOf(face)?.get(ch.codePointAt(0)!) ?? (WIDE.test(ch) ? 1000 : 500)
-  // letter spacing is a share of the glyph's own (scaled) advance
-  return ((size * em) / 1000) * ratio * (1 + spacing)
+  if (syllable) return metric.hangul
+  return advancesOf(face)?.get(ch.codePointAt(0)!) ?? (WIDE.test(ch) ? 1000 : 500)
 }
+
+/** advance of one character in points, as Hangul sets it; null when no table covers its face */
+export function advancePt(ch: string, char: CharShape): number | null {
+  const em = glyphEm(ch, char)
+  if (em === null) return null
+  const size = (char.sizeHalfPoints ?? 20) / 2
+  const metrics = slotMetrics(ch, char)
+  // letter spacing is a share of the glyph's own (scaled) advance
+  return ((size * em) / 1000) * (metrics.scalePct / 100) * (1 + metrics.spacingPct / 100)
+}
+
+/** a glyph Word draws an em wide when the table does not say (the face's default) */
+export const isWideGlyph = (ch: string): boolean => SYLLABLE.test(ch) || WIDE.test(ch)
 
 /**
  * Extra letter spacing (points, negative) per character index for the spaces

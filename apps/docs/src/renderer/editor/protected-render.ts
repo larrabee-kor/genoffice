@@ -17,6 +17,7 @@ import {
   cssCsFontFamily,
   hangulSpaceOffsets,
   hangulSpaceWideningOn,
+  hwpLayoutOn,
   krNoBreakOffsets,
   cjkDeclaredLineFactor,
   cssFontFamily,
@@ -1985,6 +1986,11 @@ export function runSpanSpecs(
     const styles: string[] = []
     if (widthPx)
       styles.push(`width:${widthPx}px`, heightPx ? `height:${heightPx}px` : 'height:auto')
+    // HWP-origin: an exact line keeps its height under the picture (styles.css)
+    if (heightPx && hwpLayoutOn()) {
+      attrs.class += ' doc-inline-img--hwp'
+      styles.push(`--doc-obj-h:${heightPx}px`)
+    }
     const xf = pictureTransformFns(rotDeg, flipH, flipV)
     if (xf.length) styles.push(`transform:${xf.join(' ')}`)
     const qtMargin = quarterTurnMarginCss(quarterTurnInsetPx(widthPx ?? 0, heightPx ?? 0, rotDeg))

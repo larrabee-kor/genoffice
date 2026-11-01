@@ -36,7 +36,17 @@ export interface CharShape {
   scalePct?: number
   /** letter spacing percent of the HANGUL slot (hh:spacing), relative to size */
   spacingPct?: number
+  /**
+   * the other language slots' scale and spacing where they differ from the
+   * HANGUL slot (lawgo-14: hangul -5%, latin 0%); a missing field means the
+   * slot has no scale / spacing
+   */
+  slots?: Partial<Record<ScriptSlot, { scalePct?: number; spacingPct?: number }>>
 }
+
+/** Hangul's per-language character shape slots besides HANGUL */
+export type ScriptSlot = 'latin' | 'hanja' | 'japanese' | 'other' | 'symbol'
+const SCRIPT_SLOTS: ScriptSlot[] = ['latin', 'hanja', 'japanese', 'other', 'symbol']
 
 export interface BorderSide {
   /** OOXML w:val */
@@ -148,7 +158,7 @@ export const COMPOUND = new Set([
   'thinThickThinSmallGap',
 ])
 
-function slotValue(node: XNode | null, slot: 'hangul' | 'latin'): string | undefined {
+function slotValue(node: XNode | null, slot: 'hangul' | ScriptSlot): string | undefined {
   return attr(node, slot)
 }
 
@@ -188,6 +198,18 @@ export function readHeader(root: XNode[]): HeaderTables {
     if (Number.isFinite(ratio) && ratio > 0 && ratio !== 100) shape.scalePct = ratio
     const spacing = Number(slotValue(firstChild(node, 'hh:spacing'), 'hangul'))
     if (Number.isFinite(spacing) && spacing !== 0) shape.spacingPct = spacing
+    for (const slot of SCRIPT_SLOTS) {
+      const r = Number(slotValue(firstChild(node, 'hh:ratio'), slot) ?? ratio)
+      const sp = Number(slotValue(firstChild(node, 'hh:spacing'), slot) ?? spacing)
+      const slotRatio = Number.isFinite(r) && r > 0 ? r : 100
+      const slotSpacing = Number.isFinite(sp) ? sp : 0
+      if (slotRatio === (shape.scalePct ?? 100) && slotSpacing === (shape.spacingPct ?? 0)) continue
+      shape.slots ??= {}
+      shape.slots[slot] = {
+        ...(slotRatio !== 100 ? { scalePct: slotRatio } : {}),
+        ...(slotSpacing !== 0 ? { spacingPct: slotSpacing } : {}),
+      }
+    }
     for (const child of elements(node)) {
       switch (child.name) {
         case 'hh:bold':

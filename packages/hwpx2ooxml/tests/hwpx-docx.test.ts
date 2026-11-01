@@ -20,6 +20,7 @@ const HEADER = `<?xml version="1.0" encoding="UTF-8"?><hh:head ${NS}><hh:refList
   <hh:charPr id="0" height="1000" textColor="#000000" shadeColor="none"><hh:fontRef hangul="0" latin="0"/><hh:ratio hangul="100"/><hh:spacing hangul="0"/><hh:underline type="NONE"/><hh:strikeout shape="3D"/></hh:charPr>
   <hh:charPr id="1" height="1600" textColor="#0000FF" shadeColor="none"><hh:fontRef hangul="0" latin="0"/><hh:ratio hangul="95"/><hh:spacing hangul="-5"/><hh:bold/><hh:underline type="BOTTOM"/><hh:strikeout shape="SOLID"/></hh:charPr>
   <hh:charPr id="2" height="900" textColor="#000000" shadeColor="none"><hh:fontRef hangul="0" latin="0"/><hh:italic/><hh:supscript/><hh:strikeout shape="NONE"/></hh:charPr>
+  <hh:charPr id="3" height="1400" textColor="#000000" shadeColor="none"><hh:fontRef hangul="0" latin="0"/><hh:ratio hangul="100" latin="100"/><hh:spacing hangul="-1" latin="0"/></hh:charPr>
 </hh:charProperties>
 <hh:paraProperties itemCnt="2">
   <hh:paraPr id="0"><hh:align horizontal="JUSTIFY"/><hh:heading type="NONE" idRef="0" level="0"/><hh:breakSetting pageBreakBefore="0" keepWithNext="0"/>
@@ -252,14 +253,53 @@ describe('convertHwpxToDocx', () => {
     const parsed = await parseDocx(docx)
     // and marks the document HWP-origin, so GenOffice draws the Hancom faces with their compat faces
     expect(parsed).toMatchObject({ balanceDbcsSpacing: true, useFELayout: true, hwpSource: true })
-    // spacing -5% of 16pt = -16 twips on a full-width glyph: Word doubles the
-    // -8 written on Hangul under the flag; Hangul's percent of a half-width
-    // Latin glyph's own advance is about -8 too
+    // spacing -5% of a 함초롬바탕 syllable (0.97 em of 16pt at 95%) = -14.7
+    // twips: Word doubles the -7 written on Hangul under the flag; Hangul's
+    // percent of a half-width Latin glyph's own advance is about -8
     const doc = await documentXml(docx)
     const hangul = doc.slice(doc.indexOf('자간') - 300, doc.indexOf('자간'))
-    expect(hangul).toContain('<w:spacing w:val="-8"/>')
+    expect(hangul).toContain('<w:spacing w:val="-7"/>')
+    // (-7.6 there, rounded either way by the running total spacedRuns keeps)
     const latin = doc.slice(doc.indexOf('ABC') - 300, doc.indexOf('ABC'))
-    expect(latin).toContain('<w:spacing w:val="-8"/>')
+    expect(latin).toMatch(/<w:spacing w:val="-[78]"\/>/)
+  })
+
+  it("keeps the running letter spacing on Hangul's, per language slot", async () => {
+    const text = '법무부는 관계기관이 참여하는 외국인정책위원회를 개최하였습니다 2026'
+    const xml = section(
+      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="3">${SEC_PR}<hp:t>${text}</hp:t></hp:run></hp:p>`,
+    )
+    const doc = await documentXml((await convertHwpxToDocx(await hwpx(xml))).docx)
+    const runs = [...doc.matchAll(/<w:r>(.*?)<\/w:r>/g)].map((m) => ({
+      text: /<w:t[^>]*>([^<]*)/.exec(m[1])?.[1] ?? '',
+      spacing: Number(/<w:spacing w:val="(-?\d+)"/.exec(m[1])?.[1] ?? 0),
+    }))
+    expect(runs.map((r) => r.text).join('')).toBe(text)
+    // -1% of a 함초롬바탕 syllable (0.97 em of 14pt) is -2.716 twips and of a
+    // half-em space -1.4; Word and GenOffice double what is written on
+    // Hangul, so the written values alternate (-1, -2) and the running total
+    // stays within 3 twips of Hangul's
+    let exact = 0
+    let actual = 0
+    for (const run of runs) {
+      for (const ch of run.text) {
+        if (/[가-힣]/.test(ch)) {
+          exact += -2.716
+          actual += run.spacing * 2
+        } else if (ch === ' ') {
+          exact += -1.4
+          actual += run.spacing
+        }
+        expect(Math.abs(exact - actual)).toBeLessThanOrEqual(3.01)
+      }
+    }
+    expect(new Set(runs.filter((r) => /[가-힣]/.test(r.text)).map((r) => r.spacing))).toEqual(
+      new Set([-1, -2]),
+    )
+    // Hangul syllables and spaces never share a run (GenOffice spreads the
+    // doubling over a run), and the digits take the LATIN slot's 0%
+    expect(runs.every((r) => !/[가-힣]/.test(r.text) || !r.text.includes(' '))).toBe(true)
+    expect(runs.find((r) => r.text.includes('2026'))?.spacing).toBe(0)
   })
 
   it("fits table rows to Hangul's row heights", async () => {
@@ -311,6 +351,42 @@ describe('convertHwpxToDocx', () => {
     // 7500 HWPUNIT = 100 px = 952500 EMU
     expect(doc).toContain('cx="952500"')
     expect(result.dropped).toEqual([])
+  })
+
+  it('keeps a line holding a character-set picture at its saved advance', async () => {
+    // a 15.6pt picture in a 10pt line at 160%: Hangul's line is the picture
+    // (1559) plus the percent's gap (600), whatever the picture overlaps
+    const pic =
+      `<hp:pic><hp:sz width="1559" height="1559"/><hp:pos treatAsChar="1"/>` +
+      `<hc:img binaryItemIDRef="image1"/></hp:pic>`
+    const segs =
+      '<hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1559" textheight="1559" baseline="1325" spacing="600" horzpos="0" horzsize="40000" flags="0"/></hp:linesegarray>'
+    const xml = section(
+      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${SEC_PR}<hp:t>(</hp:t>${pic}<hp:t>)</hp:t></hp:run>${segs}</hp:p>`,
+    )
+    const doc = await documentXml(
+      (await convertHwpxToDocx(await hwpx(xml, { 'BinData/image1.bmp': tinyBmp() }))).docx,
+    )
+    expect(doc).toContain('w:line="432" w:lineRule="exact"')
+  })
+
+  it("drops the space under a cell's last paragraph", async () => {
+    const tc =
+      `<hp:tc borderFillIDRef="1" hasMargin="0"><hp:subList vertAlign="CENTER">` +
+      `<hp:p paraPrIDRef="1"><hp:run charPrIDRef="0"><hp:t>셀 끝</hp:t></hp:run></hp:p></hp:subList>` +
+      `<hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/>` +
+      `<hp:cellSz width="10000" height="3000"/><hp:cellMargin left="0" right="0" top="0" bottom="0"/></hp:tc>`
+    const xml = section(
+      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${SEC_PR}` +
+        `<hp:tbl rowCnt="1" colCnt="1" borderFillIDRef="1"><hp:sz width="10000" height="3000"/><hp:tr>${tc}</hp:tr></hp:tbl></hp:run></hp:p>` +
+        `<hp:p paraPrIDRef="1"><hp:run charPrIDRef="0"><hp:t>본문</hp:t></hp:run></hp:p>`,
+    )
+    const doc = await documentXml((await convertHwpxToDocx(await hwpx(xml))).docx)
+    const cell = doc.slice(doc.indexOf('<w:tc>'), doc.indexOf('</w:tc>'))
+    expect(cell).toMatch(/<w:spacing w:before="100" w:after="0"/)
+    // the same paragraph shape outside the table keeps its 10pt below
+    const body = doc.slice(doc.indexOf('</w:tbl>'))
+    expect(body).toMatch(/<w:spacing w:before="100" w:after="200"/)
   })
 
   it('rejects an HWP 5 binary served under a .hwpx name', async () => {
