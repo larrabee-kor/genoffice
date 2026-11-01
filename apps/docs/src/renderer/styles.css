@@ -7223,15 +7223,17 @@ body.docs-crop-active .doc-protected[data-doc-protected='image'] .doc-img-wrap {
    as tall as itself, and a percent below 100 then spaces the next line closer
    than the picture is tall, so it overlaps (lawgo-9 sets 610 Hanja as 15.6pt
    pictures in lines advancing 11pt). The converter writes that saved advance
-   as an exact line; the picture rests on the line's bottom and only the part
-   taller than the line overlaps, so the line keeps its height. */
+   as an exact line; like Hangul, the picture hangs from the line's top and
+   only the part taller than the line runs on below it (into the paragraph
+   gap or the next line, never above the cell's first line), so the line
+   keeps its height. */
 .doc-hwp-lh-exact .doc-inline-img--hwp {
-  vertical-align: bottom;
-  margin-top: min(0px, calc(var(--doc-lh-cap, 0px) - var(--doc-obj-h, 0px)));
+  vertical-align: top;
+  margin-bottom: min(0px, calc(var(--doc-lh-cap, 0px) - var(--doc-obj-h, 0px)));
 }
 
 .doc-hwp-lh-exact .doc-inline-pic:has(> .doc-inline-img--hwp) {
-  vertical-align: bottom;
+  vertical-align: top;
 }
 
 /* floating (wp:anchor) run pictures: zero-size marker at the run, the picture
