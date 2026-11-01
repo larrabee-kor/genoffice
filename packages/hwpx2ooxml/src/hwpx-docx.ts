@@ -32,6 +32,7 @@ import {
 } from '../../docx-engine/src/index'
 import { bmpToPng } from './bmp'
 import { withFontTable } from './fonts'
+import { withHangulLayoutSettings } from './settings'
 import {
   readHeader,
   type BorderFill,
@@ -150,7 +151,7 @@ export async function convertHwpxToDocx(hwpx: Uint8Array): Promise<HwpxToDocxRes
     ...(Object.keys(ctx.pictures).length > 0 ? { newPictures: ctx.pictures } : {}),
   })
   // original font names stay on the runs; the table tells Word/GenOffice how to substitute
-  const docx = await withFontTable(saved)
+  const docx = await withHangulLayoutSettings(await withFontTable(saved))
   return { docx, blocks: blocks.length, dropped: ctx.drops.list() }
 }
 
@@ -324,6 +325,10 @@ function sameFormat(a: Run, b: Run): boolean {
   return JSON.stringify(restA) === JSON.stringify(restB)
 }
 
+/** characters Word counts as double-byte for balanced spacing: CJK, Hangul, fullwidth forms */
+const DOUBLE_BYTE =
+  /[\u1100-\u11ff\u2e80-\ua4cf\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]/
+
 function runOf(text: string, char: CharShape): Run {
   const run: Run = { text }
   if (char.bold) run.bold = true
@@ -343,8 +348,11 @@ function runOf(text: string, char: CharShape): Run {
   if (latin) run.fontAscii = latin
   if (char.scalePct) run.charScalePct = Math.min(600, Math.max(1, char.scalePct))
   if (char.spacingPct && char.sizeHalfPoints) {
-    // Hangul letter spacing is a percent of the glyph size; OOXML wants twips
-    run.charSpacingTwips = Math.round((char.spacingPct / 100) * char.sizeHalfPoints * 10)
+    // Hangul letter spacing is a percent of the glyph size; OOXML wants twips.
+    // Under the balanced-width setting (settings.ts) Word applies w:spacing
+    // twice to double-byte characters, so runs holding any are written at half
+    const twips = (char.spacingPct / 100) * char.sizeHalfPoints * 10
+    run.charSpacingTwips = Math.round(DOUBLE_BYTE.test(text) ? twips / 2 : twips)
   }
   return run
 }

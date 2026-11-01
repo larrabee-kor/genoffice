@@ -257,13 +257,17 @@ export function readHeader(root: XNode[]): HeaderTables {
     if (attr(brk, 'keepWithNext') === '1') format.keepNext = true
     if (attr(brk, 'keepLines') === '1') format.keepLines = true
     const shape: ParaShape = { format }
-    // Hangul defaults: no auto spacing around Latin/digits, Hangul breaks per
-    // glyph unless KEEP_WORD; Word defaults are the opposite, so always spell them out
+    // Hangul defaults: no auto spacing around Latin/digits; Word defaults are
+    // the opposite, so always spell them out. breakNonLatinWord reads backwards
+    // from its name: Hangul's saved line layouts break KEEP_WORD paragraphs
+    // between syllables (573 of 1191 corpus breaks fell mid-word) and
+    // BREAK_WORD ones at spaces (1 of 107), so only BREAK_WORD keeps Word's
+    // whole-word wrapping and KEEP_WORD (the default) turns w:wordWrap off
     const auto = find('hh:autoSpacing')
     shape.eastAsian = {
       autoSpaceDE: attr(auto, 'eAsianEng') === '1',
       autoSpaceDN: attr(auto, 'eAsianNum') === '1',
-      wordWrap: (attr(brk, 'breakNonLatinWord') ?? 'KEEP_WORD') === 'KEEP_WORD',
+      wordWrap: attr(brk, 'breakNonLatinWord') === 'BREAK_WORD',
     }
     if (line && (attr(line, 'type') ?? 'PERCENT') === 'PERCENT') {
       const percent = intAttr(line, 'value', 160)

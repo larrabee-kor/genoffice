@@ -180,11 +180,11 @@ describe('convertHwpxToDocx', () => {
       `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">${SEC_PR}<hp:t>한글 English 123</hp:t></hp:run></hp:p>`,
     )
     const doc = await documentXml((await convertHwpxToDocx(await hwpx(xml))).docx)
-    // paraPr 0 has no hh:autoSpacing → both off; breakSetting without breakNonLatinWord keeps words
+    // paraPr 0 has no hh:autoSpacing → both off; breakSetting without
+    // breakNonLatinWord is KEEP_WORD, which Hangul lays out between syllables
     expect(doc).toMatch(
-      /<w:autoSpaceDE w:val="0"\/><w:autoSpaceDN w:val="0"\/>(<w:snapToGrid|<w:spacing)/,
+      /<w:wordWrap w:val="0"\/><w:autoSpaceDE w:val="0"\/><w:autoSpaceDN w:val="0"\/>(<w:snapToGrid|<w:spacing)/,
     )
-    expect(doc).not.toContain('<w:wordWrap')
   })
 
   it('writes tables with spans, borders, fills, margins and a caption', async () => {
@@ -223,6 +223,29 @@ describe('convertHwpxToDocx', () => {
     expect(doc).toContain('<w:left w:w="102" w:type="dxa"/>')
     // the table default (inMargin 141 HWPUNIT = 28 twips) is written once
     expect(doc).toContain('<w:tblCellMar><w:top w:w="28" w:type="dxa"/>')
+  })
+
+  it("declares Word's balanced-width layout, Hangul's half-em spaces", async () => {
+    const xml = section(
+      `<hp:p paraPrIDRef="0"><hp:run charPrIDRef="1">${SEC_PR}<hp:t>자간 좁힘</hp:t></hp:run>` +
+        `<hp:run charPrIDRef="0"><hp:t> </hp:t></hp:run><hp:run charPrIDRef="1"><hp:t>ABC</hp:t></hp:run></hp:p>`,
+    )
+    const docx = (await convertHwpxToDocx(await hwpx(xml))).docx
+    const zip = await JSZip.loadAsync(docx)
+    expect(await zip.file('word/settings.xml')!.async('string')).toContain(
+      '<w:compat><w:balanceSingleByteDoubleByteWidth/><w:useFELayout/></w:compat>',
+    )
+    expect(await zip.file('word/_rels/document.xml.rels')!.async('string')).toContain(
+      'Target="settings.xml"',
+    )
+    const parsed = await parseDocx(docx)
+    expect(parsed).toMatchObject({ balanceDbcsSpacing: true, useFELayout: true })
+    // spacing -5% of 16pt = -16 twips; Word doubles it on Hangul under the flag
+    const doc = await documentXml(docx)
+    const hangul = doc.slice(doc.indexOf('자간') - 300, doc.indexOf('자간'))
+    expect(hangul).toContain('<w:spacing w:val="-8"/>')
+    const latin = doc.slice(doc.indexOf('ABC') - 300, doc.indexOf('ABC'))
+    expect(latin).toContain('<w:spacing w:val="-16"/>')
   })
 
   it("fits table rows to Hangul's row heights", async () => {

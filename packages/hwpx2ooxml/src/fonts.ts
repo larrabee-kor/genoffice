@@ -13,6 +13,7 @@
  */
 
 import JSZip from 'jszip'
+import { addDocumentPart } from './parts'
 import { escapeXml } from './xml'
 
 export type FontClass = 'serif' | 'sans' | 'mono'
@@ -120,36 +121,15 @@ export async function withFontTable(docx: Uint8Array): Promise<Uint8Array> {
   if (existing) {
     zip.file('word/fontTable.xml', existing.replace('</w:fonts>', `${entries}</w:fonts>`))
   } else {
-    zip.file(
-      'word/fontTable.xml',
+    await addDocumentPart(
+      zip,
+      'fontTable.xml',
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
         '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
         `${entries}</w:fonts>`,
+      FONT_TABLE_REL,
+      FONT_TABLE_CT,
     )
-    const relsPath = 'word/_rels/document.xml.rels'
-    const rels = await zip.file(relsPath)?.async('string')
-    if (rels && !rels.includes(FONT_TABLE_REL)) {
-      const used = new Set([...rels.matchAll(/Id="(rId\d+)"/g)].map((m) => m[1]))
-      let n = used.size + 1
-      while (used.has(`rId${n}`)) n++
-      zip.file(
-        relsPath,
-        rels.replace(
-          '</Relationships>',
-          `<Relationship Id="rId${n}" Type="${FONT_TABLE_REL}" Target="fontTable.xml"/></Relationships>`,
-        ),
-      )
-    }
-    const types = await zip.file('[Content_Types].xml')?.async('string')
-    if (types && !types.includes('/word/fontTable.xml')) {
-      zip.file(
-        '[Content_Types].xml',
-        types.replace(
-          '</Types>',
-          `<Override PartName="/word/fontTable.xml" ContentType="${FONT_TABLE_CT}"/></Types>`,
-        ),
-      )
-    }
   }
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 }

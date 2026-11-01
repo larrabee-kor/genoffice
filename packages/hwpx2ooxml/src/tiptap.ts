@@ -137,7 +137,14 @@ function inlineNodes(runs: Run[]): TiptapNode[] {
     const marks = runMarks(run)
     run.text.split('\n').forEach((piece, index) => {
       if (index > 0) out.push({ type: 'hardBreak' })
-      if (piece) out.push({ type: 'text', text: piece, ...(marks.length > 0 ? { marks } : {}) })
+      if (!piece) return
+      // runs the docx splits for Word-only reasons (a space's Latin face) fold back together
+      const last = out[out.length - 1]
+      if (last?.type === 'text' && JSON.stringify(last.marks ?? []) === JSON.stringify(marks)) {
+        last.text += piece
+      } else {
+        out.push({ type: 'text', text: piece, ...(marks.length > 0 ? { marks } : {}) })
+      }
     })
   }
   return out
